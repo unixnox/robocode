@@ -1,0 +1,10 @@
+{
+  "name": "SmartBot",
+  "version": "1.0",
+  "authors": ["unixnox"],
+  "description": "Wave-surfing dodger with a virtual-gun (GuessFactor / circular / linear) targeting system",
+  "countryCodes": ["us"],
+  "gameTypes": ["classic", "melee", "1v1"],
+  "platform": "Java 11+",
+  "programmingLang": "Java"
+}

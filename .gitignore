@@ -1,0 +1,4 @@
+bots/lib/
+*.class
+.idea/
+*.iml
