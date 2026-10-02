@@ -52,6 +52,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
       break;
     case 'inputs': machine?.setInputs(m.inputs); break;
     case 'serialIn': machine?.serialIn(m.text); break;
+    case 'ir': machine?.irIn(m.gpio, m.code); break;
     case 'speed': speed = m.speed; rebase(); break;
     case 'stop': stop(); break;
   }

@@ -24,14 +24,39 @@ export interface PinIn {
   echo?: { cm: number; trig: number };
   /** DHT sensor data on this pin */
   dht?: { t: number; h: number };
+  /** DS18B20 sensors on this 1-Wire bus (°C each) */
+  ow?: number[];
+  /** time-varying analog signal evaluated by the worker at read time (added to `analog`) */
+  wave?: Wave;
 }
 
-export interface I2CDevice { addr: number; sda: number; scl: number }
+export type Wave =
+  /** heartbeat: pulse of `amp` counts at `bpm` */
+  | { kind: 'heart'; bpm: number; amp: number }
+  /** sound: sine of `amp` counts at `hz` */
+  | { kind: 'tone'; hz: number; amp: number };
+
+export interface I2CDevice { addr: number; sda: number; scl: number; data?: Record<string, number> }
+
+/** A logic input of an emulated chip: wired to a GPIO, tied to a level, or fed from another chip's serial output. */
+export type PinRef = { gpio: number } | { level: 0 | 1 } | { chip: string } | null;
+
+export type DeviceSpec =
+  | { kind: '595'; id: string; ser: PinRef; srclk: PinRef; rclk: PinRef; srclr: PinRef; oe: PinRef }
+  | { kind: 'sd'; id: string; cs: number | null; mosi: number | null; miso: number | null; sck: number | null; inserted: boolean; files: Record<string, string> }
+  | { kind: 'rtc'; id: string; clk: number | null; dat: number | null; rst: number | null; offset: number }
+  | { kind: 'ir-rx'; id: string; gpio: number };
 
 export interface Inputs {
   pins: Record<number, PinIn>;
   i2c: I2CDevice[];
+  devices: DeviceSpec[];
 }
+
+export const emptyInputs = (): Inputs => ({ pins: {}, i2c: [], devices: [] });
+
+/** An IR code (NEC). */
+export interface IrCode { address: number; command: number; repeat?: boolean }
 
 /** sda/scl: GPIOs of the I2C bus the frame was sent on */
 export interface OledFrame { addr: number; sda: number; scl: number; w: number; h: number; buf: Uint8Array; invert: boolean }
@@ -50,12 +75,17 @@ export interface OutputBatch {
   lcd: LcdFrame[];
   warnings: string[];
   timeUs: number;
+  /** device state changes, by component id */
+  dev: Record<string, any>;
+  /** IR codes sent by the firmware: GPIO of the IR LED */
+  irTx: (IrCode & { gpio: number })[];
 }
 
 export type ToWorker =
   | { type: 'load'; code: string; inputs: Inputs; speed: number }
   | { type: 'inputs'; inputs: Inputs }
   | { type: 'serialIn'; text: string }
+  | { type: 'ir'; gpio: number; code: IrCode }
   | { type: 'speed'; speed: number }
   | { type: 'stop' };
 

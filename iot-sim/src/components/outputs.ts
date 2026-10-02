@@ -14,6 +14,7 @@ function onBus<F extends { sda: number; scl: number }>(ctx: ElecCtx, frame: F | 
 const NOT_POWERED = 'ยังไม่ได้ต่อไฟ (VCC→3V3/VIN, GND→GND)';
 
 export const servo: ComponentDef = {
+  size: [1.6, 0.9],
   type: 'servo',
   title: 'Servo SG90',
   category: 'actuator',
@@ -27,7 +28,7 @@ export const servo: ComponentDef = {
   props: [],
   defaults: {},
   build() {
-    const b = makeModule({ w: 1.6, d: 0.9, color: '#3a3a3a', title: '', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#3a3a3a', title: '', pins: this.pins });
     const body = new THREE.Group();
     body.position.set(0, 0, -1.6);
     const blue = mat(0x2563c9, { roughness: 0.5 });
@@ -67,6 +68,7 @@ export const servo: ComponentDef = {
 };
 
 export const buzzer: ComponentDef = {
+  size: [1.6, 1.8],
   type: 'buzzer',
   title: 'Buzzer',
   category: 'actuator',
@@ -82,7 +84,7 @@ export const buzzer: ComponentDef = {
   }],
   defaults: { kind: 'passive' },
   build() {
-    const b = makeModule({ w: 1.6, d: 1.8, color: '#1f4e8c', title: 'BUZZER', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#1f4e8c', title: 'BUZZER', pins: this.pins });
     const can = cyl(0.6, 0.6, mat(0x151515, { roughness: 0.4 }), 0, PCB_H + 0.3, -0.3, 32);
     const hole = cyl(0.1, 0.02, mat(0x000000), 0, PCB_H + 0.61, -0.3);
     const rings = new THREE.Group();
@@ -129,6 +131,7 @@ function i2cProps(addrs: number[]) {
 }
 
 export const oled: ComponentDef = {
+  size: [2.9, 3.0],
   type: 'oled',
   title: 'OLED 0.96" SSD1306',
   category: 'display',
@@ -145,7 +148,7 @@ export const oled: ComponentDef = {
   i2cAddr: (p) => +p.addr,
   autoWire: { GND: 'GND2', VCC: '3V3', SCL: 'D22', SDA: 'D21' },
   build() {
-    const b = makeModule({ w: 2.9, d: 3.0, color: '#1b3f73', title: '', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#1b3f73', title: '', pins: this.pins });
     b.root.add(box(2.7, 0.06, 1.8, mat(0x050505, { roughness: 0.2 }), 0, PCB_H + 0.03, -0.35));
     const { tex, canvas, ctx } = canvasTexture(128, 64, 1, (c, W, H) => { c.fillStyle = '#000'; c.fillRect(0, 0, W, H); });
     tex.magFilter = THREE.NearestFilter;
@@ -192,6 +195,7 @@ export const oled: ComponentDef = {
 const LCD_PX = 4; // canvas pixels per LCD dot
 
 export const lcd: ComponentDef = {
+  size: [7.6, 3.4],
   type: 'lcd',
   title: 'LCD 16×2 I2C',
   category: 'display',
@@ -208,7 +212,7 @@ export const lcd: ComponentDef = {
   i2cAddr: (p) => +p.addr,
   autoWire: { GND: 'GND1', VCC: 'VIN', SDA: 'D21', SCL: 'D22' },
   build() {
-    const b = makeModule({ w: 7.6, d: 3.4, color: '#2d7a3a', title: '', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#2d7a3a', title: '', pins: this.pins });
     b.root.add(box(6.6, 0.45, 2.0, mat(0x111111), 0, PCB_H + 0.225, -0.45));
     const W = (16 * 6 + 2) * LCD_PX;
     const H = (2 * 9 + 2) * LCD_PX;

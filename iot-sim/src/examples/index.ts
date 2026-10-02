@@ -1,12 +1,15 @@
 // Example projects: sketch + pre-wired layout.
 
-import type { Project } from '../sim/project';
+import { BOARD_ID, boardWire, type Project, type Wire } from '../sim/project';
 
 interface ExampleDef {
   id: string;
   title: string;
   code: string;
-  parts: { id: string; type: string; x: number; z: number; rot?: number; props?: Record<string, any>; wires: Record<string, string> }[];
+  /** wires: component pin -> ESP32 header pin */
+  parts: { id: string; type: string; x: number; z: number; rot?: number; props?: Record<string, any>; wires?: Record<string, string> }[];
+  /** other wires: "comp.pin" -> "comp.pin" (comp "esp32" = board header) */
+  links?: [string, string][];
 }
 
 const EXAMPLES_SRC: ExampleDef[] = [
@@ -339,17 +342,345 @@ void loop() {
       { id: 'ldr1', type: 'ldr', x: -5.5, z: -4.6, wires: { VCC: '3V3', GND: 'GND2', AO: 'D32' } },
     ],
   },
+  {
+    id: 'shift595',
+    title: '9. ไฟวิ่ง 8 ดวงด้วย 74HC595 บนเบรดบอร์ด',
+    code: `// ไฟวิ่ง (Knight Rider) 8 ดวง ใช้ GPIO แค่ 3 ขาผ่าน shift register 74HC595
+// IC วางคร่อมร่องกลางเบรดบอร์ด: VCC(16) และ MR(10) ต่อรางไฟ +, GND(8) และ OE(13) ต่อรางไฟ −
+const int DATA_PIN  = 25;  // DS   (ขา 14)
+const int LATCH_PIN = 26;  // STCP (ขา 12)
+const int CLOCK_PIN = 27;  // SHCP (ขา 11)
+
+void writeLeds(byte value) {
+  digitalWrite(LATCH_PIN, LOW);
+  shiftOut(DATA_PIN, CLOCK_PIN, MSBFIRST, value);
+  digitalWrite(LATCH_PIN, HIGH);   // ขอบขาขึ้น = ส่งค่าออกขา QA..QH
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(DATA_PIN, OUTPUT);
+  pinMode(LATCH_PIN, OUTPUT);
+  pinMode(CLOCK_PIN, OUTPUT);
+  Serial.println("74HC595 พร้อม");
+}
+
+void loop() {
+  for (int i = 0; i < 8; i++) {
+    writeLeds(1 << i);
+    delay(80);
+  }
+  for (int i = 6; i > 0; i--) {
+    writeLeds(1 << i);
+    delay(80);
+  }
+  writeLeds(0b10101010);
+  Serial.println("รอบ!");
+  delay(200);
+}
+`,
+    parts: [
+      { id: 'bb1', type: 'breadboard', x: 0, z: 9 },
+      { id: 'ic1', type: 'ic595', x: 0, z: 9 },
+      ...['red', 'red', 'orange', 'yellow', 'yellow', 'green', 'green', 'blue'].map((color, i) => (
+        { id: `led${i + 1}`, type: 'led', x: -6.25 + i * 1.75, z: 16, rot: 2, props: { color } })),
+    ],
+    links: [
+      ['esp32.3V3', 'bb1.tp1'], ['esp32.GND2', 'bb1.tn1'], ['esp32.GND1', 'bb1.bn1'],
+      ['esp32.D25', 'bb1.b14'], ['esp32.D26', 'bb1.b16'], ['esp32.D27', 'bb1.b17'],
+      ['bb1.a12', 'bb1.tp11'], ['bb1.a18', 'bb1.tp17'], ['bb1.a15', 'bb1.tn15'], ['bb1.j19', 'bb1.bn19'],
+      ['bb1.a13', 'led1.+'], ['bb1.j12', 'led2.+'], ['bb1.j13', 'led3.+'], ['bb1.j14', 'led4.+'],
+      ['bb1.j15', 'led5.+'], ['bb1.j16', 'led6.+'], ['bb1.j17', 'led7.+'], ['bb1.j18', 'led8.+'],
+      ...[2, 3, 4, 5, 7, 8, 9, 10].map((c, i): [string, string] => [`led${i + 1}.-`, `bb1.bn${c}`]),
+    ],
+  },
+  {
+    id: 'irremote',
+    title: '10. รีโมตอินฟราเรดคุมไฟ (KY-022)',
+    code: `// รับรหัสจากรีโมต IR แล้วคุมไฟ — กดปุ่มรีโมตในแผงคุณสมบัติของตัวรับ IR
+#include <IRremote.hpp>
+
+const int IR_PIN = 15;
+const int LED_PIN = 2;
+bool ledOn = false;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  IrReceiver.begin(IR_PIN, ENABLE_LED_FEEDBACK);
+  Serial.println("พร้อมรับรีโมต: ปุ่ม 1 = เปิด, 2 = ปิด, ⏯ = สลับ");
+}
+
+void loop() {
+  if (IrReceiver.decode()) {
+    IrReceiver.printIRResultShort(&Serial);
+    switch (IrReceiver.decodedIRData.command) {
+      case 0x0C: ledOn = true;   break;  // ปุ่ม 1
+      case 0x18: ledOn = false;  break;  // ปุ่ม 2
+      case 0x43: ledOn = !ledOn; break;  // ⏯
+    }
+    digitalWrite(LED_PIN, ledOn);
+    IrReceiver.resume();
+  }
+  delay(10);
+}
+`,
+    parts: [
+      { id: 'irrx1', type: 'irrx', x: -2.5, z: -4.6, wires: { S: 'D15', VCC: '3V3', GND: 'GND2' } },
+      { id: 'led1', type: 'led', x: 1.5, z: -4.5, props: { color: 'green' }, wires: { '+': 'D2', '-': 'GND2' } },
+    ],
+  },
+  {
+    id: 'watering',
+    title: '11. รดน้ำต้นไม้อัตโนมัติ (Soil + Relay)',
+    code: `// วัดความชื้นดิน ถ้าแห้งให้รีเลย์เปิด "ปั๊มน้ำ" (LED สีน้ำเงินต่อผ่านหน้าสัมผัสรีเลย์)
+// ลองเลื่อนความชื้นดินในแผงคุณสมบัติของเซนเซอร์
+const int SOIL_PIN = 34;   // AO
+const int RELAY_PIN = 26;  // S ของรีเลย์
+const int DRY = 2800;      // มากกว่านี้ = ดินแห้ง
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+}
+
+void loop() {
+  int value = analogRead(SOIL_PIN);
+  bool dry = value > DRY;
+  digitalWrite(RELAY_PIN, dry ? HIGH : LOW);
+  Serial.printf("soil=%d  %s\\n", value, dry ? "แห้ง → เปิดปั๊ม" : "ชื้นพอ → ปิดปั๊ม");
+  delay(1000);
+}
+`,
+    parts: [
+      { id: 'soil1', type: 'soil', x: -5, z: -5.5, wires: { VCC: '3V3', GND: 'GND1', AO: 'D34' } },
+      { id: 'relay1', type: 'relay', x: 1, z: -6, wires: { S: 'D26', VCC: 'VIN', GND: 'GND1' } },
+      { id: 'pump', type: 'led', x: 5.5, z: -6.5, props: { color: 'blue' }, wires: { '-': 'GND2' } },
+    ],
+    links: [['relay1.COM', 'esp32.VIN'], ['relay1.NO', 'pump.+']],
+  },
+  {
+    id: 'mpu',
+    title: '12. วัดมุมเอียงด้วย MPU6050',
+    code: `// อ่านความเร่ง/ไจโรจาก MPU6050 แล้วคำนวณมุม roll/pitch — ปรับมุมในแผงคุณสมบัติของเซนเซอร์
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Wire.h>
+
+Adafruit_MPU6050 mpu;
+
+void setup() {
+  Serial.begin(115200);
+  if (!mpu.begin()) {
+    Serial.println("ไม่พบ MPU6050");
+    while (1) delay(10);
+  }
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  Serial.println("MPU6050 พร้อม");
+}
+
+void loop() {
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+  float roll = atan2(a.acceleration.y, a.acceleration.z) * 180 / PI;
+  float pitch = atan2(-a.acceleration.x, sqrt(a.acceleration.y * a.acceleration.y + a.acceleration.z * a.acceleration.z)) * 180 / PI;
+  Serial.printf("roll=%5.1f  pitch=%5.1f  gyroZ=%.2f rad/s  T=%.1f C\\n", roll, pitch, g.gyro.z, temp.temperature);
+  delay(500);
+}
+`,
+    parts: [
+      { id: 'mpu1', type: 'mpu6050', x: 0, z: -5.5, props: { roll: 20, pitch: -10 }, wires: { VCC: '3V3', GND: 'GND2', SCL: 'D22', SDA: 'D21' } },
+    ],
+  },
+  {
+    id: 'sdlog',
+    title: '13. บันทึกอุณหภูมิลง SD card (DS18B20)',
+    code: `// อ่าน DS18B20 ทุก 2 วินาที แล้วบันทึกลงไฟล์ /log.csv ในการ์ด SD
+// ดูไฟล์ได้ในแผงคุณสมบัติของโมดูล SD (ไฟล์ถูกบันทึกไปกับโปรเจกต์)
+#include <SPI.h>
+#include <SD.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+const int ONE_WIRE_PIN = 4;
+const int SD_CS = 5;
+OneWire oneWire(ONE_WIRE_PIN);
+DallasTemperature sensors(&oneWire);
+
+void setup() {
+  Serial.begin(115200);
+  sensors.begin();
+  if (!SD.begin(SD_CS)) {
+    Serial.println("SD card ใช้งานไม่ได้");
+    return;
+  }
+  File f = SD.open("/log.csv", FILE_APPEND);
+  if (f) {
+    f.println("millis,tempC");
+    f.close();
+  }
+  Serial.println("เริ่มบันทึกลง /log.csv");
+}
+
+void loop() {
+  sensors.requestTemperatures();
+  float t = sensors.getTempCByIndex(0);
+  File f = SD.open("/log.csv", FILE_APPEND);
+  if (f) {
+    f.printf("%lu,%.2f\\n", millis(), t);
+    f.close();
+  }
+  Serial.printf("%.2f C -> บันทึกแล้ว\\n", t);
+  delay(2000);
+}
+`,
+    parts: [
+      { id: 'ds1', type: 'ds18b20', x: -4.5, z: -5, wires: { S: 'D4', VCC: '3V3', GND: 'GND2' } },
+      { id: 'sd1', type: 'sd', x: 2, z: -6, wires: { GND: 'GND1', VCC: 'VIN', MISO: 'D19', MOSI: 'D23', SCK: 'D18', CS: 'D5' } },
+    ],
+  },
+  {
+    id: 'rtc',
+    title: '14. นาฬิกา RTC DS1302 บนจอ LCD',
+    code: `// อ่านเวลาจาก DS1302 (ไลบรารี "Rtc by Makuna") แสดงบนจอ LCD 16x2
+#include <ThreeWire.h>
+#include <RtcDS1302.h>
+#include <LiquidCrystal_I2C.h>
+
+ThreeWire myWire(4, 5, 2);  // IO(DAT), SCLK(CLK), CE(RST)
+RtcDS1302<ThreeWire> Rtc(myWire);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+#define countof(a) (sizeof(a) / sizeof(a[0]))
+
+void printDateTime(const RtcDateTime& dt) {
+  char line[17];
+  snprintf_P(line, countof(line), PSTR("%02u/%02u/%04u"), dt.Day(), dt.Month(), dt.Year());
+  lcd.setCursor(0, 0);
+  lcd.print(line);
+  snprintf_P(line, countof(line), PSTR("%02u:%02u:%02u"), dt.Hour(), dt.Minute(), dt.Second());
+  lcd.setCursor(0, 1);
+  lcd.print(line);
+  Serial.println(line);
+}
+
+void setup() {
+  Serial.begin(115200);
+  lcd.init();
+  lcd.backlight();
+  Rtc.Begin();
+  RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
+  if (!Rtc.IsDateTimeValid()) Rtc.SetDateTime(compiled);
+  if (Rtc.GetIsWriteProtected()) Rtc.SetIsWriteProtected(false);
+  if (!Rtc.GetIsRunning()) Rtc.SetIsRunning(true);
+}
+
+void loop() {
+  RtcDateTime now = Rtc.GetDateTime();
+  printDateTime(now);
+  delay(1000);
+}
+`,
+    parts: [
+      { id: 'rtc1', type: 'ds1302', x: -5, z: -5.2, wires: { VCC: '3V3', GND: 'GND2', CLK: 'D5', DAT: 'D4', RST: 'D2' } },
+      { id: 'lcd1', type: 'lcd', x: 2.5, z: -6.5, wires: { GND: 'GND1', VCC: 'VIN', SDA: 'D21', SCL: 'D22' } },
+    ],
+  },
+  {
+    id: 'encoder',
+    title: '15. Rotary encoder ปรับความสว่าง LED',
+    code: `// หมุน rotary encoder (ล้อเมาส์เหนือลูกบิด) เพื่อปรับความสว่าง LED ด้วย PWM, กดลูกบิดเพื่อเปิด/ปิด
+const int CLK = 32, DT = 33, SW = 25;
+const int LED_PIN = 26;
+int brightness = 128;
+int lastClk;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(CLK, INPUT);
+  pinMode(DT, INPUT);
+  pinMode(SW, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  lastClk = digitalRead(CLK);
+  Serial.println("หมุนลูกบิดเพื่อปรับความสว่าง");
+}
+
+void loop() {
+  int clk = digitalRead(CLK);
+  if (clk != lastClk && clk == LOW) {
+    if (digitalRead(DT) != clk) brightness += 16;   // ตามเข็ม
+    else brightness -= 16;                          // ทวนเข็ม
+    brightness = constrain(brightness, 0, 255);
+    Serial.printf("ความสว่าง = %d\\n", brightness);
+  }
+  lastClk = clk;
+  if (digitalRead(SW) == LOW) {
+    brightness = brightness ? 0 : 255;
+    Serial.println("กดลูกบิด");
+    delay(300);
+  }
+  analogWrite(LED_PIN, brightness);
+  delay(1);
+}
+`,
+    parts: [
+      { id: 'enc1', type: 'encoder', x: -3.5, z: -5.5, wires: { CLK: 'D32', DT: 'D33', SW: 'D25', VCC: '3V3', GND: 'GND2' } },
+      { id: 'led1', type: 'led', x: 2, z: -4.5, props: { color: 'yellow' }, wires: { '+': 'D26', '-': 'GND2' } },
+    ],
+  },
+  {
+    id: 'clap',
+    title: '16. ปรบมือเปิด-ปิดไฟ (ไมโครโฟน)',
+    code: `// ปรบมือ (ปุ่ม 👏 ในแผงของไมโครโฟน) เพื่อสลับไฟ — ใช้ขา DO ของโมดูลเสียง
+const int SOUND_DO = 27;
+const int LED_PIN = 2;
+bool ledOn = false;
+unsigned long lastClap = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(SOUND_DO, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  Serial.println("ปรบมือเพื่อเปิด/ปิดไฟ");
+}
+
+void loop() {
+  if (digitalRead(SOUND_DO) == HIGH && millis() - lastClap > 300) {
+    lastClap = millis();
+    ledOn = !ledOn;
+    digitalWrite(LED_PIN, ledOn);
+    Serial.println(ledOn ? "ปรบมือ -> เปิดไฟ" : "ปรบมือ -> ปิดไฟ");
+  }
+}
+`,
+    parts: [
+      { id: 'mic1', type: 'mic', x: -3, z: -5, props: { variant: 'ky038' }, wires: { DO: 'D27', VCC: '3V3', GND: 'GND2' } },
+      { id: 'led1', type: 'led', x: 1.5, z: -4.5, props: { color: 'white' }, wires: { '+': 'D2', '-': 'GND2' } },
+    ],
+  },
 ];
 
 export const EXAMPLES = EXAMPLES_SRC.map((e) => ({ id: e.id, title: e.title }));
 
 export function loadExample(id: string): Project {
   const e = EXAMPLES_SRC.find((x) => x.id === id) ?? EXAMPLES_SRC[0];
+  const end = (s: string) => {
+    const i = s.indexOf('.');
+    return { comp: s.slice(0, i), pin: s.slice(i + 1) };
+  };
+  const wires: Wire[] = [
+    ...e.parts.flatMap((p) => Object.entries(p.wires ?? {}).map(([pin, board], i) => boardWire(`${p.id}-w${i}`, p.id, pin, board))),
+    ...(e.links ?? []).map(([a, b], i) => ({ id: `link${i}`, a: end(a), b: end(b) })),
+  ];
+  for (const w of wires) for (const x of [w.a, w.b]) if (x.comp === 'esp32') x.comp = BOARD_ID;
   return {
-    version: 1,
+    version: 2,
     name: e.title.replace(/^\d+\.\s*/, ''),
     code: e.code,
-    components: e.parts.map((p) => ({ id: p.id, type: p.type, x: p.x, z: p.z, rot: p.rot ?? 0, props: { ...(p.props ?? {}) } })),
-    wires: e.parts.flatMap((p) => Object.entries(p.wires).map(([pin, board], i) => ({ id: `${p.id}-w${i}`, comp: p.id, pin, board }))),
+    components: e.parts.map((p) => ({ id: p.id, type: p.type, x: p.x, z: p.z, rot: p.rot ?? 0, props: structuredClone(p.props ?? {}) })),
+    wires,
   };
 }

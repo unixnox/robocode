@@ -7,7 +7,7 @@ import { compile } from '../src/compiler/compiler';
 import { Machine } from '../src/runtime/machine';
 import { run } from './helpers';
 
-const inputs = (pins: Inputs['pins'], i2c: Inputs['i2c'] = []): Inputs => ({ pins, i2c });
+const inputs = (pins: Inputs['pins'], i2c: Inputs['i2c'] = [], devices: Inputs['devices'] = []): Inputs => ({ pins, i2c, devices });
 
 describe('runtime', () => {
   test('provides every builtin the compiler knows', () => {

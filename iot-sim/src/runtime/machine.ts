@@ -2,7 +2,7 @@
 
 import { createRuntime, RuntimeError } from './arduinoApi';
 import { Board, Restart } from './board';
-import type { Inputs, OutputBatch } from './protocol';
+import type { Inputs, IrCode, OutputBatch } from './protocol';
 
 export interface Program { setup: (() => Generator) | null; loop: (() => Generator) | null; line: () => number }
 
@@ -73,6 +73,11 @@ export class Machine {
 
   setInputs(inputs: Inputs) { this.board.setInputs(inputs); }
   serialIn(text: string) { this.board.serialIn += text; }
+  irIn(gpio: number, code: IrCode) {
+    const q = this.board.irQueue.get(gpio) ?? [];
+    if (q.length < 8) q.push(code);
+    this.board.irQueue.set(gpio, q);
+  }
 
   /**
    * Run until virtual time reaches `untilUs` or wall-clock `deadline` (performance.now() ms) passes.

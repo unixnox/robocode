@@ -3,13 +3,27 @@
 import { ADC1, ADC2, Board, INPUT_ONLY } from './board';
 import { __a, __S, __sprintf, __str, __String, dtostrf } from './format';
 import { createDeviceLibs } from './libs/devices';
+import { attachChips } from './libs/chips';
 import { createDisplayLibs } from './libs/displays';
+import { createModuleLibs } from './libs/modules';
+import type { Wave } from './protocol';
 
 const MODES: Record<number, 'input' | 'output' | 'input_pullup' | 'input_pulldown'> = {
   1: 'input', 3: 'output', 5: 'input_pullup', 9: 'input_pulldown', 2: 'output',
 };
 
 export class RuntimeError extends Error {}
+
+/** Value of a time-varying analog source at time t (seconds). */
+export function waveAt(w: Wave, t: number): number {
+  if (w.kind === 'tone') return w.amp * Math.sin(2 * Math.PI * w.hz * t);
+  // heartbeat: sharp systolic peak + smaller dicrotic bump
+  const period = 60 / Math.max(20, w.bpm);
+  const ph = (t % period) / period;
+  const peak = Math.exp(-((ph - 0.15) ** 2) / 0.002);
+  const bump = 0.35 * Math.exp(-((ph - 0.4) ** 2) / 0.006);
+  return w.amp * (peak + bump);
+}
 
 /** Deterministic PRNG so randomSeed() behaves like on the device. */
 function mulberry32(seed: number) {
@@ -83,6 +97,10 @@ export function createRuntime(board: Board): Record<string, any> {
         return 0;
       }
       const inp = board.input(pin);
+      if (inp?.wave) {
+        const v = (inp.analog ?? 0) + waveAt(inp.wave, board.time / 1e6) + (rand() - 0.5) * 8;
+        return Math.max(0, Math.min(4095, Math.round(v)));
+      }
       if (inp?.analog !== undefined) {
         // a little ADC noise like the real thing
         const noise = Math.round((rand() - 0.5) * 6);
@@ -193,6 +211,26 @@ export function createRuntime(board: Board): Record<string, any> {
     interrupts() {},
     noInterrupts() {},
 
+    // --------------------------------------------------------------- shift registers
+    shiftOut(data: number, clock: number, order: number, val: number) {
+      for (let i = 0; i < 8; i++) {
+        const bit = order === 0 ? (val >> i) & 1 : (val >> (7 - i)) & 1; // LSBFIRST = 0
+        api.digitalWrite(data, bit);
+        api.digitalWrite(clock, 1);
+        api.digitalWrite(clock, 0);
+      }
+    },
+    shiftIn(data: number, clock: number, order: number) {
+      let v = 0;
+      for (let i = 0; i < 8; i++) {
+        api.digitalWrite(clock, 1);
+        const bit = api.digitalRead(data);
+        if (order === 0) v |= bit << i; else v |= bit << (7 - i);
+        api.digitalWrite(clock, 0);
+      }
+      return v;
+    },
+
     // --------------------------------------------------------------- misc ESP32
     touchRead() { return 62; },
     hallRead() { return Math.round((rand() - 0.5) * 20); },
@@ -295,8 +333,13 @@ export function createRuntime(board: Board): Record<string, any> {
       return c;
     },
     __ret: (old: any) => old,
+    /** C++ truthiness of an object (File has operator bool) */
+    __b: (v: any) => (v && typeof v === 'object' && typeof v.__bool === 'function' ? v.__bool() : !!v),
     __yield: api.__yield,
   };
 
-  return { ...api, ...helpers, ...createDeviceLibs(board), ...createDisplayLibs(board) };
+  attachChips(board);
+  const { mpuRegister, ...modules } = createModuleLibs(board);
+  board.i2cRead = (addr, reg) => (board.i2cDevice(addr)?.data?.mpu ? mpuRegister(addr, reg) : 0);
+  return { ...api, ...helpers, ...createDeviceLibs(board), ...createDisplayLibs(board), ...modules };
 }

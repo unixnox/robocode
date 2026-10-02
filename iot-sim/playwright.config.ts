@@ -9,6 +9,8 @@ export default defineConfig({
     launchOptions: {
       // use a pre-installed Chromium when available (e.g. CI images); otherwise Playwright's own
       executablePath: process.env.CHROMIUM_PATH || undefined,
+      // or an installed browser: PW_CHANNEL=chrome npm run e2e
+      channel: process.env.PW_CHANNEL || undefined,
       args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
     },
   },

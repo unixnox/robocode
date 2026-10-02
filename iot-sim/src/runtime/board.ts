@@ -1,6 +1,8 @@
 // Simulated ESP32 board state shared by the Arduino API and libraries.
 
-import type { Inputs, LcdFrame, OledFrame, OutputBatch, PinIn, PinOut } from './protocol';
+import {
+  emptyInputs, type DeviceSpec, type Inputs, type IrCode, type LcdFrame, type OledFrame, type OutputBatch, type PinIn, type PinOut,
+} from './protocol';
 
 export const VALID_GPIO = [0, 1, 2, 3, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33, 34, 35, 36, 39];
 export const INPUT_ONLY = [34, 35, 36, 39];
@@ -17,7 +19,7 @@ export class Board {
   until = Infinity;
   ops = 0;
   pins = new Map<number, PinOut>();
-  inputs: Inputs = { pins: {}, i2c: [] };
+  inputs: Inputs = emptyInputs();
   i2cPins = { sda: 21, scl: 22 };
   wifiStartedAt: number | null = null;
   serialIn = '';
@@ -27,13 +29,19 @@ export class Board {
   interrupts = new Map<number, { fn: () => Generator; mode: number }>();
   timers: { at: number; fn: () => void }[] = [];
   private warned = new Set<string>();
+  /** called after any GPIO level may have changed (firmware write or new inputs) — chip emulation */
+  levelHooks: (() => void)[] = [];
+  /** IR codes waiting to be decoded, per receiver GPIO */
+  irQueue = new Map<number, IrCode[]>();
+  /** register read of an I2C device (set by the module libraries) */
+  i2cRead: (addr: number, reg: number) => number = () => 0;
   /** run an ISR (set by the machine) */
   runIsr: (fn: () => Generator) => void = () => undefined;
 
   out: OutputBatch = Board.emptyBatch();
 
   static emptyBatch(): OutputBatch {
-    return { pins: {}, serial: '', oled: [], lcd: [], warnings: [], timeUs: 0 };
+    return { pins: {}, serial: '', oled: [], lcd: [], warnings: [], timeUs: 0, dev: {}, irTx: [] };
   }
 
   takeOutput(): OutputBatch {
@@ -60,10 +68,19 @@ export class Board {
 
   setPin(p: number, patch: Partial<PinOut>) {
     const s = this.pin(p);
-    const wasHigh = s.level === 1;
+    const was = s.level;
     Object.assign(s, patch);
-    if (wasHigh && s.level === 0) this.lastFall.set(p, this.time);
+    if (was === 1 && s.level === 0) this.lastFall.set(p, this.time);
     this.out.pins[p] = { ...s };
+    if (was !== s.level) this.levelHooks.forEach((h) => h());
+  }
+
+  devices<K extends DeviceSpec['kind']>(kind: K): Extract<DeviceSpec, { kind: K }>[] {
+    return this.inputs.devices.filter((d) => d.kind === kind) as Extract<DeviceSpec, { kind: K }>[];
+  }
+
+  i2cDevice(addr: number) {
+    return this.inputs.i2c.find((d) => d.addr === addr && d.sda === this.i2cPins.sda && d.scl === this.i2cPins.scl);
   }
 
   input(p: number): PinIn | undefined {
@@ -110,6 +127,7 @@ export class Board {
         this.runIsr(isr.fn);
       }
     }
+    this.levelHooks.forEach((h) => h());
   }
 
   oled(frame: OledFrame) {

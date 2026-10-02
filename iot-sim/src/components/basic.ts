@@ -9,6 +9,7 @@ const LED_COLORS: Record<string, number> = {
 };
 
 export const led: ComponentDef = {
+  size: [1.3, 1.3],
   type: 'led',
   title: 'LED',
   category: 'basic',
@@ -27,7 +28,7 @@ export const led: ComponentDef = {
   }],
   defaults: { color: 'red' },
   build(p) {
-    const b = makeModule({ w: 1.3, d: 1.3, color: '#1f4e8c', title: 'LED', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#1f4e8c', title: 'LED', pins: this.pins });
     const color = LED_COLORS[p.color] ?? 0xff0000;
     const lens = new THREE.MeshStandardMaterial({
       color, emissive: color, emissiveIntensity: 0, transparent: true, opacity: 0.85, roughness: 0.2,
@@ -57,23 +58,8 @@ export const led: ComponentDef = {
   },
 };
 
-/** Two-terminal switch: when closed, a supply/GND on one side drives the GPIO on the other. */
-function switchInputs(ctx: ElecCtx, a: string, b: string, closed: boolean) {
-  if (!closed) return;
-  for (const [x, y] of [[a, b], [b, a]]) {
-    const gx = ctx.gpio(x);
-    if (gx === null) continue;
-    const ny = ctx.net(y);
-    if (ny?.kind === 'gnd') ctx.drive(x, { drive: 0 });
-    else if (ny?.kind === 'supply') ctx.drive(x, { drive: 1 });
-    else if (ny?.kind === 'gpio') {
-      const o = ctx.out(y);
-      if (o && (o.mode === 'output' || o.mode === 'pwm')) ctx.drive(x, { drive: o.level });
-    }
-  }
-}
-
 export const button: ComponentDef = {
+  size: [1.6, 1.6],
   type: 'button',
   title: 'ปุ่มกด',
   category: 'basic',
@@ -86,16 +72,16 @@ export const button: ComponentDef = {
   props: [{ key: 'pressed', label: 'กดค้างไว้', kind: 'hold' }],
   defaults: { pressed: false },
   build() {
-    const b = makeModule({ w: 1.6, d: 1.6, color: '#2b2b2b', title: 'BUTTON', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#2b2b2b', title: 'BUTTON', pins: this.pins });
     b.root.add(box(0.9, 0.3, 0.9, mat(0x222222), 0, PCB_H + 0.15, -0.2));
     const cap = cyl(0.3, 0.25, mat(0xd9342b, { roughness: 0.4 }), 0, PCB_H + 0.42, -0.2);
-    cap.userData.pressable = true;
     b.root.add(cap);
+    cap.userData.action = { kind: 'hold', key: 'pressed', ms: 0 };
     b.pressables = [cap];
     b.parts = { cap };
     return b;
   },
-  inputs(ctx, p) { switchInputs(ctx, 'A', 'B', !!p.pressed); },
+  shorts: (_ctx, p) => (p.pressed ? [['A', 'B']] : []),
   render(_ctx, v, p) {
     const target = PCB_H + (p.pressed ? 0.33 : 0.42);
     v.parts.cap.position.y += (target - v.parts.cap.position.y) * 0.5;
@@ -107,6 +93,7 @@ export const button: ComponentDef = {
 };
 
 export const potentiometer: ComponentDef = {
+  size: [1.8, 1.8],
   type: 'pot',
   title: 'Potentiometer',
   category: 'basic',
@@ -120,7 +107,7 @@ export const potentiometer: ComponentDef = {
   props: [{ key: 'value', label: 'ตำแหน่ง', kind: 'range', min: 0, max: 100, step: 1, unit: '%' }],
   defaults: { value: 50 },
   build() {
-    const b = makeModule({ w: 1.8, d: 1.8, color: '#1f4e8c', title: 'POT 10K', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#1f4e8c', title: 'POT 10K', pins: this.pins });
     b.root.add(box(1.0, 0.35, 1.0, mat(0x2d6cdf), 0, PCB_H + 0.175, -0.25));
     const knob = new THREE.Group();
     knob.position.set(0, PCB_H + 0.35, -0.25);
@@ -145,6 +132,7 @@ export const potentiometer: ComponentDef = {
 };
 
 export const rgbLed: ComponentDef = {
+  size: [2.2, 1.5],
   type: 'rgb',
   title: 'RGB LED',
   category: 'basic',
@@ -162,7 +150,7 @@ export const rgbLed: ComponentDef = {
   }],
   defaults: { common: 'cathode' },
   build() {
-    const b = makeModule({ w: 2.2, d: 1.5, color: '#202020', title: 'RGB LED', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#202020', title: 'RGB LED', pins: this.pins });
     const lens = new THREE.MeshStandardMaterial({
       color: 0xf4f4f4, emissive: 0x000000, transparent: true, opacity: 0.9, roughness: 0.3,
     });

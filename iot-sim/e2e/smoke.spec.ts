@@ -44,7 +44,7 @@ test('drag LED from palette, wire it by clicking pins, run Blink', async ({ page
   await click(null, 'D2');
   await click(id, '-');
   await click(null, 'GND1');
-  const wires = await page.evaluate(() => window.__app.sim.project.wires.map((w: any) => `${w.pin}->${w.board}`).sort());
+  const wires = await page.evaluate(() => window.__app.sim.project.wires.map((w: any) => `${w.a.pin}->${w.b.pin}`).sort());
   expect(wires).toEqual(['+->D2', '-->GND1']);
 
   await page.evaluate(() => window.__app.editor.code = `void setup(){ Serial.begin(115200); pinMode(2, OUTPUT); }
@@ -81,4 +81,61 @@ test('compile errors are shown with the line number', async ({ page }) => {
   await page.click('#btn-run');
   await expect(page.locator('#compile-status')).toContainText('บรรทัด 3');
   await expect(page.locator('.cm-error-line')).toHaveCount(1);
+});
+
+test('search the palette by KY code and add with Enter', async ({ page }) => {
+  const errors = await fresh(page);
+  await page.click('#btn-new');
+  await page.keyboard.press('/');
+  await page.keyboard.type('ky022');
+  await expect(page.locator('.pal-list .item').first()).toHaveAttribute('data-type', 'irrx');
+  await expect(page.locator('.pal-count')).toContainText('พบ');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.__app.sim.project.components.map((c: any) => c.type))).toEqual(['irrx']);
+  // category + interface filters
+  await page.fill('.pal-search', '');
+  await page.locator('.pal-tags summary').click();
+  await page.locator('.pal-tags .chip', { hasText: 'I2C' }).click();
+  await expect(page.locator('.pal-list .item')).toHaveCount(3);
+  expect(errors).toEqual([]);
+});
+
+test('plug an LED into the breadboard and drive it through a breadboard wire', async ({ page }) => {
+  const errors = await fresh(page);
+  await page.click('#btn-new');
+  await page.locator('.palette .item[data-type=breadboard]').click();
+  const bb = await page.evaluate(() => window.__app.sim.project.components[0].id);
+  await page.evaluate(() => window.__app.scene.fitView());
+  await page.waitForTimeout(300);
+  // drop an LED near hole g15: the part snaps onto the hole grid and its legs go into the strips
+  const hole = await page.evaluate((id) => window.__app.scene.pinScreen(id, 'g15'), bb);
+  const box = (await page.locator('#viewport canvas').boundingBox())!;
+  await page.locator('.palette .item[data-type=led]').dragTo(page.locator('#viewport canvas'), {
+    targetPosition: { x: hole.x - box.x, y: hole.y - box.y + 8 },
+  });
+  await expect.poll(() => page.evaluate(() => window.__app.sim.sol.inserted.size)).toBe(1);
+  const led = await page.evaluate(() => window.__app.sim.project.components[1].id);
+  const plugged = await page.evaluate((id) => [...window.__app.sim.sol.insertions.entries()]
+    .filter(([k]: [string]) => k.startsWith(id)).map(([, v]: [string, string]) => v.split('\u0000')[1]), led);
+  expect(plugged).toHaveLength(2);
+  // wire a free hole of the "+" strip to GPIO2 and the "-" strip to GND, by clicking
+  const plusCol = plugged.map((h: string) => h.slice(1)).sort()[0];
+  const minusCol = plugged.map((h: string) => h.slice(1)).sort()[1];
+  const click = async (comp: string | null, pin: string) => {
+    const p = await page.evaluate(([c, n]) => window.__app.scene.pinScreen(c, n), [comp, pin] as const);
+    await page.mouse.click(p.x, p.y);
+  };
+  await click(bb, `j${plusCol}`);
+  await click(null, 'D2');
+  await click(bb, `j${minusCol}`);
+  await click(null, 'GND1');
+  expect(await page.evaluate(() => window.__app.sim.project.wires.length)).toBe(2);
+  await page.evaluate(() => window.__app.editor.code = 'void setup(){ pinMode(2, OUTPUT); digitalWrite(2, HIGH); }\nvoid loop(){}');
+  await page.click('#btn-run');
+  await expect.poll(() => page.evaluate((id) => {
+    const app = window.__app;
+    const c = app.sim.project.components.find((x: any) => x.id === id);
+    return app.sim.ctx(c).volts('+');
+  }, led), { timeout: 5000 }).toBeCloseTo(3.3);
+  expect(errors).toEqual([]);
 });

@@ -4,7 +4,7 @@
 // delay()/pulseIn() and at loop back-edges without blocking the worker thread.
 // Calls to user functions and blocking builtins are emitted as `(yield* f(...))`.
 
-import { CLASSES, CONSTANTS, FUNCTIONS, KNOWN_HEADERS, OBJECTS, type Kind } from './builtins';
+import { CLASSES, CONSTANTS, FIELDS, FUNCTIONS, KNOWN_HEADERS, OBJECTS, type Kind, type RetKind } from './builtins';
 import { CompileError, tokenize, type Token } from './lexer';
 
 export interface Ty {
@@ -30,6 +30,8 @@ const INT_KINDS: Kind[] = ['i32', 'u32', 'i16', 'u16', 'u8', 'i8', 'c', 'i64'];
 const isInt = (t: Ty) => !t.arr && INT_KINDS.includes(t.k);
 const isNum = (t: Ty) => !t.arr && (isInt(t) || t.k === 'f' || t.k === 'b');
 const T = (k: Kind, extra: Partial<Ty> = {}): Ty => ({ k, ...extra });
+/** Type of a builtin method result / field: a Kind, or 'obj:ClassName'. */
+const retTy = (r: RetKind): Ty => (r.startsWith('obj:') ? T('obj', { cls: r.slice(4) }) : T(r as Kind));
 
 const TYPE_WORDS: Record<string, Kind> = {
   void: 'v', bool: 'b', boolean: 'b', int: 'i32', long: 'i32', short: 'i16', char: 'c', float: 'f', double: 'f',
@@ -53,7 +55,7 @@ const PRINT_METHODS = new Set(['print', 'println']);
 
 const RUNTIME_HELPERS = [
   '__i32', '__u32', '__i16', '__u16', '__u8', '__i8', '__i64', '__idiv', '__imod', '__a', '__str', '__S',
-  '__bc', '__tick', '__sync', '__arr', '__pad', '__clone', '__sprintf', '__String', '__ret', '__yield',
+  '__bc', '__b', '__tick', '__sync', '__arr', '__pad', '__clone', '__sprintf', '__String', '__ret', '__yield',
 ];
 
 const BIN_PREC: Record<string, number> = {
@@ -185,6 +187,7 @@ class Compiler {
     const v = t.value;
     if (QUALIFIERS.has(v)) return true;
     const after = this.peek(n + 1).value;
+    if (v === 'fs' && after === '::') return true;
     if (after === '::' || after === '.' || after === '->') return false;
     if (Object.hasOwn(TYPE_WORDS, v)) return true;
     if ((Object.hasOwn(CLASSES, v) && !(Object.hasOwn(OBJECTS, v))) || this.structs.has(v) || this.enums.has(v)) return true;
@@ -209,6 +212,13 @@ class Compiler {
       if (v === 'signed') { unsigned = false; this.next(); continue; }
       if (v === 'long') { longs++; this.next(); continue; }
       if (v === 'short' && base === null) { base = 'short'; this.next(); continue; }
+      if (v === 'fs' && base === null && this.is('::', 1)) {
+        // fs::FS / fs::File (ESP32 SD examples)
+        this.next(); this.next();
+        const n = this.ident();
+        base = n === 'FS' ? 'SDFS' : n;
+        break;
+      }
       if (base === null && (v === 'int' || v === 'char' || v === 'double')) { base = v; this.next(); continue; }
       if (base === null && unsigned === null && longs === 0 &&
         (Object.hasOwn(TYPE_WORDS, v) || Object.hasOwn(CLASSES, v) || this.structs.has(v) || this.enums.has(v))) {
@@ -229,6 +239,16 @@ class Compiler {
     else if (this.enums.has(base)) ty = T('i32');
     else ty = T('obj', { cls: base });
     if (unsigned && ty.k === 'i32') ty = T('u32');
+    // template arguments of library classes (RtcDS1302<ThreeWire>) are ignored
+    if (ty.k === 'obj' && this.is('<')) {
+      let depth = 0;
+      do {
+        if (this.is('<')) depth++;
+        else if (this.is('>')) depth--;
+        else if (this.is('>>')) depth -= 2;
+        this.next();
+      } while (depth > 0 && this.tok.kind !== 'eof');
+    }
     // trailing qualifiers (e.g. "char const *", "void IRAM_ATTR isr()")
     while (this.is('const') || this.is('volatile') || this.is('IRAM_ATTR') || this.is('inline')) this.next();
     return { ty, isConst, isStatic };
@@ -286,7 +306,7 @@ class Compiler {
       case 'i8': case 'c': return e.t.k === 'c' ? e.c : `__i8(${e.c})`;
       case 'i64': return isInt(e.t) ? e.c : `__i64(${e.c})`;
       case 'f': return isNum(e.t) && e.t.k !== 'b' ? e.c : `(+${e.c})`;
-      case 'b': return e.t.k === 'b' ? e.c : `!!(${e.c})`;
+      case 'b': return e.t.k === 'b' ? e.c : `!!(${this.truth(e)})`;
       case 's': return e.t.k === 's' ? e.c : `__str(${e.c}, '${tagOf(e.t)}')`;
       case 'obj':
         if (to.cls && this.structs.has(to.cls) && e.t.k === 'obj') return `__clone(${e.c})`;
@@ -310,7 +330,7 @@ class Compiler {
     const save = this.pos;
     const { ty: base, isConst } = this.parseType();
     const ty = this.parsePtr(base, isConst, false);
-    if (this.tok.kind === 'ident' && this.is('(', 1) && this.looksLikeFunction()) {
+    if (this.tok.kind === 'ident' && this.is('(', 1) && this.looksLikeFunction(ty)) {
       return this.functionDef(ty, t);
     }
     if (this.sigOnly) {
@@ -323,9 +343,11 @@ class Compiler {
   }
 
   /** At `name (` — decide between function and constructor-style declaration `Servo s(…)`. */
-  private looksLikeFunction(): boolean {
-    let i = 2;
+  private looksLikeFunction(ret?: Ty): boolean {
+    if (ret?.k === 'v') return true;
+    const i = 2;
     const first = this.peek(i);
+    if (first.value === 'fs' && this.is('::', i + 1)) return true;
     if (first.value === ')') {
       // "Type name()" : function unless followed by ';' for a class type (vexing parse => treat as function anyway)
       return true;
@@ -629,9 +651,14 @@ class Compiler {
   private cond(): string {
     this.expect('(');
     if (this.isTypeStart()) this.fail('ตัวจำลองยังไม่รองรับการประกาศตัวแปรในเงื่อนไข');
-    const s = this.expr().c;
+    const s = this.truth(this.expr());
     this.expect(')');
     return s;
+  }
+
+  /** JS condition for a C++ value: objects with operator bool (File) go through __b(). */
+  private truth(e: Expr): string {
+    return e.t.k === 'obj' && !e.t.arr ? `__b(${e.c})` : e.c;
   }
 
   private statement(): string {
@@ -741,7 +768,7 @@ class Compiler {
       if (!this.is(';')) init = this.expr().c;
       this.expect(';');
     }
-    const c = this.is(';') ? '' : this.expr().c;
+    const c = this.is(';') ? '' : this.truth(this.expr());
     this.expect(';');
     const upd = this.is(')') ? '' : this.expr().c;
     this.expect(')');
@@ -789,10 +816,10 @@ class Compiler {
     let t = a.t;
     if (a.t.k === 's' || b.t.k === 's') {
       t = T('s');
-      return { c: `(${c.c} ? ${this.coerce(a, t)} : ${this.coerce(b, t)})`, t };
+      return { c: `(${this.truth(c)} ? ${this.coerce(a, t)} : ${this.coerce(b, t)})`, t };
     }
     if (a.t.k === 'f' || b.t.k === 'f') t = T('f');
-    return { c: `(${c.c} ? ${a.c} : ${b.c})`, t };
+    return { c: `(${this.truth(c)} ? ${a.c} : ${b.c})`, t };
   }
 
   private binaryExpr(minPrec: number): Expr {
@@ -821,7 +848,7 @@ class Compiler {
     if ((a.t.arr || b.t.arr) && op !== '==' && op !== '!=') this.fail(`invalid operands to binary ${op} (array)`, at);
     switch (op) {
       case '&&': case '||':
-        return { c: `!!(${a.c} ${op} ${b.c})`, t: T('b') };
+        return { c: `!!(${this.truth(a)} ${op} ${this.truth(b)})`, t: T('b') };
       case '==': case '!=': case '<': case '>': case '<=': case '>=': {
         const jsop = op === '==' ? '===' : op === '!=' ? '!==' : op;
         if (a.t.k === 's' || b.t.k === 's') {
@@ -875,7 +902,7 @@ class Compiler {
       switch (t.value) {
         case '-': { this.next(); const e = this.unary(); return { c: `(-${e.c})`, t: e.t.k === 'b' || e.t.k === 'c' || e.t.k === 'u8' ? T('i32') : e.t }; }
         case '+': { this.next(); const e = this.unary(); return { c: `(+${e.c})`, t: e.t }; }
-        case '!': { this.next(); const e = this.unary(); return { c: `(!${e.c})`, t: T('b') }; }
+        case '!': { this.next(); const e = this.unary(); return { c: `(!${this.truth(e)})`, t: T('b') }; }
         case '~': { this.next(); const e = this.unary(); return { c: e.t.k === 'u32' ? `((~${e.c}) >>> 0)` : `(~${e.c})`, t: e.t.k === 'u32' ? T('u32') : T('i32') }; }
         case '++': case '--': {
           this.next();
@@ -1031,6 +1058,11 @@ class Compiler {
       const c = `${obj.c}.$${name}`;
       return { c, t: f.ty, lv: (rhs) => `${c} = ${rhs}` };
     }
+    const fields = FIELDS[cls];
+    if (fields && Object.hasOwn(fields, name)) {
+      const c = `${obj.c}.${name}`;
+      return { c, t: retTy(fields[name]), lv: (rhs) => `${c} = ${rhs}` };
+    }
     const methods = CLASSES[cls];
     if (!methods || !Object.hasOwn(methods, name)) this.fail(`'class ${cls}' has no member named '${name}'`, at);
     if (!this.is('(')) this.fail(`invalid use of member function '${name}' (did you forget the '()' ?)`, at);
@@ -1039,8 +1071,7 @@ class Compiler {
     const argCode = PRINT_METHODS.has(name) ? this.wrapPrint(args)
       : name === 'printf' ? args.map((a, i) => (i === 0 ? a.c : `__a(${a.c}, '${tagOf(a.t)}')`)).join(', ')
         : args.map((a) => a.c).join(', ');
-    const t: Ty = ret === 'obj' ? T('obj', { cls: 'IPAddress' }) : T(ret);
-    return { c: `${obj.c}.${name}(${argCode})`, t };
+    return { c: `${obj.c}.${name}(${argCode})`, t: retTy(ret) };
   }
 
   private primary(): Expr {
@@ -1096,15 +1127,22 @@ class Compiler {
     }
     if (Object.hasOwn(CONSTANTS, name)) {
       const [val, k] = CONSTANTS[name];
-      const c = Number.isNaN(val) ? 'NaN' : val === Infinity ? 'Infinity' : String(val);
+      const c = typeof val === 'string' ? JSON.stringify(val) : Number.isNaN(val) ? 'NaN' : val === Infinity ? 'Infinity' : String(val);
       return { c, t: T(k) };
+    }
+    if (name === '__DATE__' || name === '__TIME__') {
+      const d = new Date();
+      const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()];
+      const p2 = (n: number) => String(n).padStart(2, '0');
+      const v = name === '__DATE__' ? `${mon} ${String(d.getDate()).padStart(2)} ${d.getFullYear()}` : `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+      return { c: JSON.stringify(v), t: T('s') };
     }
     if (Object.hasOwn(OBJECTS, name)) return { c: name, t: T('obj', { cls: OBJECTS[name] }) };
     if (name === 'F' || name === 'PSTR') {
       const args = this.args();
       return args[0];
     }
-    if (Object.hasOwn(FUNCTIONS, name) || name === 'sprintf' || name === 'snprintf' || name === 'strcpy' || name === 'strcat' || name === 'strncpy') {
+    if (Object.hasOwn(FUNCTIONS, name) || ['sprintf', 'snprintf', 'sprintf_P', 'snprintf_P', 'strcpy', 'strcat', 'strncpy'].includes(name)) {
       if (!this.is('(')) this.fail(`invalid use of function '${name}'`, t);
       return this.builtinCall(name, t);
     }
@@ -1119,9 +1157,9 @@ class Compiler {
       return a;
     };
     switch (name) {
-      case 'sprintf': case 'snprintf': {
+      case 'sprintf': case 'snprintf': case 'sprintf_P': case 'snprintf_P': {
         const dst = target(0);
-        const rest = args.slice(name === 'snprintf' ? 2 : 1);
+        const rest = args.slice(name.startsWith('snprintf') ? 2 : 1);
         const fmt = rest.shift();
         if (!fmt) this.fail(`too few arguments to function '${name}'`, at);
         const call = `__sprintf(${[fmt.c, ...rest.map((a) => `__a(${a.c}, '${tagOf(a.t)}')`)].join(', ')})`;

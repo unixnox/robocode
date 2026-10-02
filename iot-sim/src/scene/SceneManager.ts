@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { BB_TOP } from '../components/layout';
+import { holeTitle } from '../components/proto';
 import { COMPONENT } from '../components/registry';
 import type { Built, ComponentDef, FrameInfo } from '../components/types';
 import { BOARD_PIN, boardPinTitle } from '../sim/boardPins';
-import type { PlacedComponent, Wire } from '../sim/project';
+import { snapToBreadboard } from '../sim/netlist';
+import { BOARD_ID, sameEnd, type Endpoint, type PlacedComponent, type Wire } from '../sim/project';
 import type { Simulator } from '../sim/Simulator';
 import { buildEsp32, type Esp32Model } from './esp32Model';
 
@@ -14,14 +17,21 @@ export interface SceneCallbacks {
   /** the project was modified by an interaction (move, wire, press) */
   changed(what: 'move' | 'wire' | 'props'): void;
   drop(type: string, x: number, z: number): void;
-  addWire(comp: string, pin: string, board: string): void;
+  addWire(a: Endpoint, b: Endpoint): void;
   tones(map: Map<string, number>): void;
+  /** a relay switched */
+  click(): void;
   frame(): void;
 }
 
 interface View { comp: PlacedComponent; def: ComponentDef; built: Built; key: string }
 interface WireView { mesh: THREE.Mesh; key: string }
-type PendingEnd = { comp: string; pin: string } | { board: string };
+type Hit =
+  | { kind: 'pin'; end: Endpoint; obj: THREE.Object3D }
+  | { kind: 'press'; comp: string; obj: THREE.Object3D }
+  | { kind: 'wire'; id: string }
+  | { kind: 'comp'; id: string }
+  | { kind: 'board' };
 
 const WIRE_COLORS = ['#fdd835', '#43a047', '#1e88e5', '#fb8c00', '#8e24aa', '#00acc1', '#d81b60', '#7cb342'];
 
@@ -31,11 +41,19 @@ function hash(s: string) {
   return Math.abs(h);
 }
 
-export function wireColor(w: Wire): string {
+/** Wire color: explicit, else black for ground, red for supply nets, otherwise a stable "random" color. */
+export function wireColor(w: Wire, sim?: Simulator): string {
   if (w.color) return w.color;
-  const bp = BOARD_PIN.get(w.board);
-  if (bp?.kind === 'gnd') return '#2b2b2b';
-  if (bp?.kind === '3v3' || bp?.kind === '5v') return '#e53935';
+  for (const e of [w.a, w.b]) {
+    if (e.comp === BOARD_ID) {
+      const bp = BOARD_PIN.get(e.pin);
+      if (bp?.kind === 'gnd') return '#2b2b2b';
+      if (bp?.kind === '3v3' || bp?.kind === '5v') return '#e53935';
+    }
+  }
+  const n = sim?.netOf(w.a.comp, w.a.pin);
+  if (n?.gnd) return '#2b2b2b';
+  if (n && n.supply !== null) return '#e53935';
   return WIRE_COLORS[hash(w.id) % WIRE_COLORS.length];
 }
 
@@ -50,11 +68,12 @@ export class SceneManager {
   private ray = new THREE.Raycaster();
   private ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private selection: Selection = null;
-  private pending: (PendingEnd & { pos: THREE.Vector3 }) | null = null;
+  private pending: (Endpoint & { pos: THREE.Vector3 }) | null = null;
   private rubber: THREE.Line;
-  private drag: { id: string; dx: number; dz: number; moved: boolean } | null = null;
-  private pressing: { comp: PlacedComponent } | null = null;
+  private drag: { id: string; dx: number; dz: number; moved: boolean; riders: { c: PlacedComponent; ox: number; oz: number }[] } | null = null;
+  private pressing: { comp: PlacedComponent; key: string } | null = null;
   private hovered: THREE.Mesh | null = null;
+  private hoverBoard: View | null = null;
   private downAt: { x: number; y: number } | null = null;
   private last = performance.now();
   private tooltip: HTMLDivElement;
@@ -75,7 +94,7 @@ export class SceneManager {
     this.controls.enableDamping = true;
     this.controls.maxPolarAngle = Math.PI * 0.47;
     this.controls.minDistance = 4;
-    this.controls.maxDistance = 70;
+    this.controls.maxDistance = 90;
     this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
 
     this.setupWorld();
@@ -99,14 +118,14 @@ export class SceneManager {
 
   private setupWorld() {
     this.scene.background = new THREE.Color(0x1d2330);
-    this.scene.fog = new THREE.Fog(0x1d2330, 60, 140);
+    this.scene.fog = new THREE.Fog(0x1d2330, 70, 160);
     this.scene.add(new THREE.HemisphereLight(0xdde8ff, 0x2a2f3a, 1.1));
     const sun = new THREE.DirectionalLight(0xffffff, 1.6);
     sun.position.set(8, 20, 10);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const s = sun.shadow.camera;
-    s.left = -25; s.right = 25; s.top = 25; s.bottom = -25; s.near = 1; s.far = 60;
+    s.left = -30; s.right = 30; s.top = 30; s.bottom = -30; s.near = 1; s.far = 70;
     sun.shadow.bias = -0.0005;
     this.scene.add(sun);
 
@@ -127,10 +146,10 @@ export class SceneManager {
     g.strokeRect(1, 1, 510, 510);
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(10, 10);
+    tex.repeat.set(12, 12);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
-    const mat = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95 }));
+    const mat = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95 }));
     mat.rotation.x = -Math.PI / 2;
     mat.receiveShadow = true;
     mat.name = 'ground';
@@ -149,6 +168,7 @@ export class SceneManager {
   // ------------------------------------------------------------------ sync
   /** Reconcile 3D views with the project. */
   sync() {
+    this.sim.resolve();
     const p = this.sim.project;
     const ids = new Set(p.components.map((c) => c.id));
     for (const [id, v] of this.views) {
@@ -168,7 +188,7 @@ export class SceneManager {
         this.views.set(c.id, v);
       }
       v.comp = c;
-      v.built.root.position.set(c.x, 0, c.z);
+      v.built.root.position.set(c.x, this.sim.sol.inserted.has(c.id) ? BB_TOP : 0, c.z);
       v.built.root.rotation.y = -c.rot * Math.PI / 2;
       v.built.root.updateMatrixWorld(true);
     }
@@ -176,12 +196,8 @@ export class SceneManager {
     this.applySelection();
   }
 
-  private pinWorld(w: Wire): [THREE.Vector3, THREE.Vector3] | null {
-    const v = this.views.get(w.comp);
-    const a = v?.built.pins.get(w.pin);
-    const b = this.esp.pins.get(w.board);
-    if (!a || !b) return null;
-    return [a.getWorldPosition(new THREE.Vector3()), b.getWorldPosition(new THREE.Vector3())];
+  private pinObj(e: Endpoint): THREE.Object3D | undefined {
+    return e.comp === BOARD_ID ? this.esp.pins.get(e.pin) : this.views.get(e.comp)?.built.pins.get(e.pin);
   }
 
   private syncWires() {
@@ -191,15 +207,17 @@ export class SceneManager {
       if (!ids.has(id)) { this.scene.remove(wv.mesh); wv.mesh.geometry.dispose(); this.wires.delete(id); }
     }
     for (const w of p.wires) {
-      const ends = this.pinWorld(w);
-      if (!ends) continue;
-      const [a, b] = ends;
-      const color = wireColor(w);
+      const oa = this.pinObj(w.a);
+      const ob = this.pinObj(w.b);
+      if (!oa || !ob) continue;
+      const a = oa.getWorldPosition(new THREE.Vector3());
+      const b = ob.getWorldPosition(new THREE.Vector3());
+      const color = wireColor(w, this.sim);
       const key = `${a.toArray().map((n) => n.toFixed(3))}|${b.toArray().map((n) => n.toFixed(3))}|${color}`;
       const cur = this.wires.get(w.id);
       if (cur && cur.key === key) continue;
       const dist = a.distanceTo(b);
-      const lift = 0.5 + dist * 0.18;
+      const lift = 0.4 + dist * 0.16;
       const curve = new THREE.CatmullRomCurve3([
         a,
         a.clone().add(new THREE.Vector3(0, lift * 0.6, 0)),
@@ -237,16 +255,13 @@ export class SceneManager {
       const sel = this.selection?.kind === 'comp' && this.selection.id === id;
       let ring = v.built.root.getObjectByName('sel-ring') as THREE.Mesh | undefined;
       if (sel && !ring) {
-        const bb = new THREE.Box3().setFromObject(v.built.root);
-        const size = bb.getSize(new THREE.Vector3());
-        const r = Math.max(size.x, size.z) * 0.62 + 0.2;
+        const [w, d] = v.def.size;
+        const r = Math.max(w, d) * 0.62 + 0.2;
         ring = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.12, 48),
           new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.8, depthWrite: false }));
         ring.name = 'sel-ring';
         ring.rotation.x = -Math.PI / 2;
-        const center = bb.getCenter(new THREE.Vector3());
-        v.built.root.worldToLocal(center);
-        ring.position.set(center.x, 0.02, center.z);
+        ring.position.set(0, 0.02, 0);
         v.built.root.add(ring);
       } else if (!sel && ring) {
         v.built.root.remove(ring);
@@ -257,6 +272,18 @@ export class SceneManager {
   cancelWire() {
     this.pending = null;
     this.rubber.visible = false;
+  }
+
+  /** Point the camera at everything on the table. */
+  fitView() {
+    const box = new THREE.Box3().setFromObject(this.esp.root);
+    for (const v of this.views.values()) box.expandByObject(v.built.root);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const r = Math.max(size.x, size.z * 1.1, 12);
+    this.controls.target.set(center.x, 0, center.z);
+    this.camera.position.set(center.x, r * 1.15, center.z + r * 1.0);
+    this.controls.update();
   }
 
   focusOn(id: string) {
@@ -272,22 +299,24 @@ export class SceneManager {
     return this.ray.ray.intersectPlane(this.ground, new THREE.Vector3());
   }
 
+  private toScreen(v: THREE.Vector3) {
+    const p = v.clone().project(this.camera);
+    const r = this.renderer.domElement.getBoundingClientRect();
+    return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height };
+  }
+
   /** Client (page) coordinates of a component pin or, with comp = null, an ESP32 header pin. Used by e2e tests. */
   pinScreen(comp: string | null, pin: string): { x: number; y: number } | null {
-    const obj = comp === null ? this.esp.pins.get(pin) : this.views.get(comp)?.built.pins.get(pin);
-    if (!obj) return null;
-    const v = obj.getWorldPosition(new THREE.Vector3()).project(this.camera);
-    const r = this.renderer.domElement.getBoundingClientRect();
-    return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+    const obj = this.pinObj({ comp: comp ?? BOARD_ID, pin });
+    return obj ? this.toScreen(obj.getWorldPosition(new THREE.Vector3())) : null;
   }
 
   /** Client coordinates of a component's pressable part (button cap / PIR dome). */
   pressScreen(comp: string): { x: number; y: number } | null {
     const obj = this.views.get(comp)?.built.pressables?.[0];
     if (!obj) return null;
-    const v = obj.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.15, 0)).project(this.camera);
-    const r = this.renderer.domElement.getBoundingClientRect();
-    return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+    const box = new THREE.Box3().setFromObject(obj);
+    return this.toScreen(box.getCenter(new THREE.Vector3()).setY(box.max.y));
   }
 
   screenshot(): string {
@@ -302,27 +331,48 @@ export class SceneManager {
     this.ray.setFromCamera(ndc, this.camera);
   }
 
-  private pick(clientX: number, clientY: number) {
+  private pick(clientX: number, clientY: number): Hit | null {
     this.setRay(clientX, clientY);
     const targets: THREE.Object3D[] = [this.esp.root, ...[...this.views.values()].map((v) => v.built.root),
       ...[...this.wires.values()].map((w) => w.mesh)];
-    const hits = this.ray.intersectObjects(targets, true).filter((h) => h.object.visible && !(h.object instanceof THREE.Sprite) && h.object.name !== 'sel-ring');
+    const hits = this.ray.intersectObjects(targets, true)
+      .filter((h) => h.object.visible && !(h.object instanceof THREE.Sprite) && h.object.name !== 'sel-ring');
+    // thin wires often cross in front of parts: a pin or clickable part behind a wire wins over the wire
+    let wire: Hit | null = null;
     for (const h of hits) {
+      const r = this.classify(h);
+      if (!r) continue;
+      if (r.kind === 'wire') { wire ??= r; continue; }
+      const hole = r.kind === 'pin' && this.views.get(r.end.comp)?.def.breadboard;
+      if (!wire || r.kind === 'press' || (r.kind === 'pin' && !hole)) return r;
+      return wire;
+    }
+    return wire;
+  }
+
+  private classify(h: THREE.Intersection): Hit | null {
+    {
       let o: THREE.Object3D | null = h.object;
       let pinName: string | undefined;
+      let pinObj: THREE.Object3D | undefined;
       let pressObj: THREE.Object3D | undefined;
+      const inst = h.object.userData.instancePins as string[] | undefined;
+      if (inst && h.instanceId !== undefined) pinName = inst[h.instanceId];
       while (o) {
         const u = o.userData;
-        if (u.boardPin) return { kind: 'boardPin' as const, id: u.boardPin as string, obj: h.object as THREE.Mesh };
-        if (u.pinName && !pinName) pinName = u.pinName;
-        if ((u.pressable || u.toggle) && !pressObj) pressObj = o;
-        if (u.wireId) return { kind: 'wire' as const, id: u.wireId as string };
+        if (u.boardPin) return { kind: 'pin', end: { comp: BOARD_ID, pin: u.boardPin }, obj: h.object };
+        if (u.pinName && !pinName) { pinName = u.pinName; pinObj = h.object; }
+        if (u.action && !pressObj) pressObj = o;
+        if (u.wireId) return { kind: 'wire', id: u.wireId };
         if (u.compId) {
-          if (pinName) return { kind: 'pin' as const, comp: u.compId as string, pin: pinName, obj: h.object as THREE.Mesh };
-          if (pressObj) return { kind: 'press' as const, comp: u.compId as string, obj: pressObj };
-          return { kind: 'comp' as const, id: u.compId as string, point: h.point };
+          if (pinName) {
+            const marker = this.views.get(u.compId)?.built.pins.get(pinName) ?? pinObj ?? h.object;
+            return { kind: 'pin', end: { comp: u.compId, pin: pinName }, obj: marker };
+          }
+          if (pressObj) return { kind: 'press', comp: u.compId, obj: pressObj };
+          return { kind: 'comp', id: u.compId };
         }
-        if (o === this.esp.root) return { kind: 'board' as const };
+        if (o === this.esp.root) return { kind: 'board' };
         o = o.parent;
       }
     }
@@ -336,6 +386,16 @@ export class SceneManager {
     window.addEventListener('pointerup', (e) => this.onUp(e));
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('pointerleave', () => this.showTooltip(null));
+    // mouse wheel over a rotary encoder turns it instead of zooming (capture phase runs before OrbitControls)
+    this.container.addEventListener('wheel', (e) => {
+      const hit = this.pick(e.clientX, e.clientY);
+      const id = hit?.kind === 'press' ? hit.comp : hit?.kind === 'comp' ? hit.id : null;
+      const v = id ? this.views.get(id) : undefined;
+      if (!v?.def.onWheel) return;
+      e.preventDefault();
+      e.stopPropagation();
+      v.def.onWheel(this.sim.memOf(v.comp.id), v.comp.props, e.deltaY < 0 ? 1 : -1);
+    }, { capture: true, passive: false });
 
     this.container.addEventListener('dragover', (e) => {
       if (e.dataTransfer?.types.includes('text/x-component')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
@@ -356,18 +416,16 @@ export class SceneManager {
     if (!hit) return;
     const p = this.sim.project;
     switch (hit.kind) {
-      case 'pin':
-      case 'boardPin': {
+      case 'pin': {
         this.controls.enabled = false;
-        const end: PendingEnd = hit.kind === 'pin' ? { comp: hit.comp, pin: hit.pin } : { board: hit.id };
         const pos = hit.obj.getWorldPosition(new THREE.Vector3());
-        if (this.pending && ('board' in this.pending) !== ('board' in end)) {
-          const compEnd = ('comp' in end ? end : this.pending) as { comp: string; pin: string };
-          const boardEnd = ('board' in end ? end : this.pending) as { board: string };
-          this.cb.addWire(compEnd.comp, compEnd.pin, boardEnd.board);
+        if (this.pending && !sameEnd(this.pending, hit.end)) {
+          this.cb.addWire({ comp: this.pending.comp, pin: this.pending.pin }, hit.end);
+          this.cancelWire();
+        } else if (this.pending) {
           this.cancelWire();
         } else {
-          this.pending = { ...end, pos };
+          this.pending = { ...hit.end, pos };
           this.rubber.visible = true;
           this.updateRubber(e);
         }
@@ -376,9 +434,10 @@ export class SceneManager {
       case 'press': {
         this.controls.enabled = false;
         const c = p.components.find((x) => x.id === hit.comp)!;
-        const key = hit.obj.userData.toggle as string | undefined;
-        if (key) c.props[key] = !c.props[key];
-        else { c.props.pressed = true; this.pressing = { comp: c }; }
+        const a = hit.obj.userData.action as { kind: 'hold' | 'toggle' | 'pulse'; key: string; ms: number };
+        if (a.kind === 'toggle') c.props[a.key] = !c.props[a.key];
+        else if (a.kind === 'pulse') this.sim.memOf(c.id)[a.key] = performance.now() / 1000 + a.ms / 1000;
+        else { c.props[a.key] = true; this.pressing = { comp: c, key: a.key }; }
         this.cb.changed('props');
         break;
       }
@@ -386,7 +445,12 @@ export class SceneManager {
         this.controls.enabled = false;
         const c = p.components.find((x) => x.id === hit.id)!;
         const g = this.groundAt(e.clientX, e.clientY);
-        this.drag = { id: c.id, dx: g ? c.x - g.x : 0, dz: g ? c.z - g.z : 0, moved: false };
+        // parts plugged into a breadboard move with it
+        const riders = COMPONENT.get(c.type)?.breadboard
+          ? p.components.filter((o) => o.id !== c.id && [...this.sim.sol.insertions].some(([k, v]) => k.startsWith(o.id + '\u0000') && v.startsWith(c.id + '\u0000')))
+            .map((o) => ({ c: o, ox: o.x - c.x, oz: o.z - c.z }))
+          : [];
+        this.drag = { id: c.id, dx: g ? c.x - g.x : 0, dz: g ? c.z - g.z : 0, moved: false, riders };
         this.selection = { kind: 'comp', id: c.id };
         this.cb.select(this.selection);
         this.applySelection();
@@ -414,6 +478,23 @@ export class SceneManager {
     this.rubber.computeLineDistances();
   }
 
+  /** Short description of what else is on the net of an endpoint. */
+  private netSummary(e: Endpoint): string {
+    const n = this.sim.netOf(e.comp, e.pin);
+    if (!n) return '';
+    const parts: string[] = [];
+    if (n.short) parts.push('⚠ ลัดวงจร!');
+    else if (n.gnd) parts.push('GND');
+    else if (n.supply !== null) parts.push(`${n.supply}V`);
+    for (const g of n.gpios) parts.push(`GPIO${g}`);
+    const others = n.members.filter((m) => m.comp !== BOARD_ID && m.comp !== e.comp && !COMPONENT.get(this.typeOf(m.comp))?.breadboard);
+    for (const m of others.slice(0, 4)) parts.push(`${m.comp}.${m.pin}`);
+    if (others.length > 4) parts.push(`+${others.length - 4}`);
+    return parts.length ? `\nเชื่อมกับ: ${parts.join(', ')}` : '';
+  }
+
+  private typeOf(id: string) { return this.sim.project.components.find((c) => c.id === id)?.type ?? ''; }
+
   private onMove(e: PointerEvent) {
     if (this.drag) {
       const g = this.groundAt(e.clientX, e.clientY);
@@ -421,6 +502,9 @@ export class SceneManager {
       if (g && c) {
         c.x = Math.round((g.x + this.drag.dx) * 4) / 4;
         c.z = Math.round((g.z + this.drag.dz) * 4) / 4;
+        const snap = snapToBreadboard(this.sim.project, COMPONENT, c);
+        if (snap) [c.x, c.z] = snap;
+        for (const r of this.drag.riders) { r.c.x = c.x + r.ox; r.c.z = c.z + r.oz; }
         this.drag.moved = true;
         this.sync();
       }
@@ -431,9 +515,11 @@ export class SceneManager {
     const hit = e.buttons ? null : this.pick(e.clientX, e.clientY);
     let mesh: THREE.Mesh | null = null;
     let text: string | null = null;
-    if (hit?.kind === 'boardPin') {
-      mesh = hit.obj;
-      const bp = BOARD_PIN.get(hit.id)!;
+    let board: View | null = null;
+    let strip: string[] = [];
+    if (hit?.kind === 'pin' && hit.end.comp === BOARD_ID) {
+      mesh = hit.obj as THREE.Mesh;
+      const bp = BOARD_PIN.get(hit.end.pin)!;
       text = boardPinTitle(bp);
       if (bp.gpio !== null && this.sim.running) {
         const o = this.sim.pinOut.get(bp.gpio);
@@ -441,23 +527,39 @@ export class SceneManager {
           text += `\n${o.mode}${o.mode === 'output' ? ' = ' + (o.level ? 'HIGH' : 'LOW') : o.mode === 'pwm' ? ` ${Math.round(o.duty * 100)}%` : o.mode === 'tone' ? ` ${o.freq} Hz` : o.mode === 'servo' ? ` ${o.angle}°` : ''}`;
         }
       }
-      const n = this.sim.project.wires.filter((w) => w.board === hit.id).length;
-      if (n) text += `\nสายที่ต่ออยู่: ${n}`;
+      text += this.netSummary(hit.end);
     } else if (hit?.kind === 'pin') {
-      mesh = hit.obj;
-      const v = this.views.get(hit.comp)!;
-      const pd = v.def.pins.find((x) => x.name === hit.pin);
-      text = `${v.def.title} • ${pd?.label ?? hit.pin}${pd?.hint ? ' — ' + pd.hint : ''}`;
-      const w = this.sim.project.wires.find((x) => x.comp === hit.comp && x.pin === hit.pin);
-      text += w ? `\n→ ${BOARD_PIN.get(w.board)?.label}` : '\nคลิกแล้วคลิกขาบน ESP32 เพื่อต่อสาย';
+      const v = this.views.get(hit.end.comp)!;
+      if (v.def.breadboard) {
+        board = v;
+        text = `เบรดบอร์ด ${holeTitle(hit.end.pin)}${this.netSummary(hit.end)}`;
+        const n = this.sim.netOf(hit.end.comp, hit.end.pin);
+        strip = (n?.members ?? []).filter((m) => m.comp === v.comp.id).map((m) => m.pin);
+      } else {
+        mesh = (hit.obj as THREE.Mesh).isMesh ? hit.obj as THREE.Mesh : null;
+        const pd = v.def.pins.find((x) => x.name === hit.end.pin);
+        text = `${v.def.title} • ${pd?.label ?? hit.end.pin}${pd?.hint ? ' — ' + pd.hint : ''}`;
+        const summary = this.netSummary(hit.end);
+        text += summary || '\nคลิกแล้วคลิกขาอื่น (ESP32 / เบรดบอร์ด / อุปกรณ์) เพื่อต่อสาย';
+      }
+      if (this.pending) text += '\n(คลิกเพื่อต่อสาย)';
     } else if (hit?.kind === 'press') {
-      text = hit.obj.userData.toggle ? 'คลิกเพื่อสลับ' : 'คลิกค้างเพื่อกด';
+      const a = hit.obj.userData.action as { kind: string };
+      text = a.kind === 'toggle' ? 'คลิกเพื่อสลับ' : a.kind === 'pulse' ? 'คลิกเพื่อกระตุ้น' : 'คลิกค้างเพื่อกด';
+      if (this.views.get(hit.comp)?.def.onWheel) text += ' • หมุนล้อเมาส์เพื่อหมุน';
     }
     if (this.hovered !== mesh) {
-      if (this.hovered) (this.hovered.material as THREE.MeshStandardMaterial).emissive.set(0x000000);
-      if (mesh) (mesh.material as THREE.MeshStandardMaterial).emissive.set(0x996600);
+      const em = (m: THREE.Mesh | null, c: number) => {
+        const mt = m?.material as THREE.MeshStandardMaterial | undefined;
+        if (mt?.emissive) mt.emissive.set(c);
+      };
+      em(this.hovered, 0x000000);
+      em(mesh, 0x996600);
       this.hovered = mesh;
     }
+    if (this.hoverBoard && this.hoverBoard !== board) this.hoverBoard.built.parts.highlight?.([]);
+    if (board) board.built.parts.highlight?.(strip);
+    this.hoverBoard = board;
     this.renderer.domElement.style.cursor = hit && hit.kind !== 'board' ? 'pointer' : 'default';
     this.showTooltip(text, e.clientX, e.clientY);
   }
@@ -474,7 +576,7 @@ export class SceneManager {
   private onUp(e: PointerEvent) {
     this.controls.enabled = true;
     if (this.pressing) {
-      this.pressing.comp.props.pressed = false;
+      this.pressing.comp.props[this.pressing.key] = false;
       this.pressing = null;
       this.cb.changed('props');
     }
@@ -505,11 +607,19 @@ export class SceneManager {
       oled: (a) => this.sim.oled.get(a), lcd: (a) => this.sim.lcd.get(a),
     };
     const tones = new Map<string, number>();
+    let click = false;
     for (const v of this.views.values()) {
       const r = v.def.render?.(this.sim.ctx(v.comp), v.built, v.comp.props, f);
       if (r && r.tone) tones.set(v.comp.id, r.tone);
+      if (r && r.click) click = true;
     }
     this.cb.tones(tones);
+    if (click) this.cb.click();
+    if (this.sim.sol !== this.lastSol) {
+      // connectivity changed (relay switched, part plugged in): wire colors / heights may change
+      this.lastSol = this.sim.sol;
+      if (++this.solTick % 15 === 0) this.syncWires();
+    }
     const o2 = this.sim.pinOut.get(2);
     const lvl = o2 ? (o2.mode === 'pwm' ? o2.duty : o2.mode === 'output' ? o2.level : 0) : 0;
     this.esp.ledMat.emissiveIntensity = lvl * 3;
@@ -518,4 +628,7 @@ export class SceneManager {
     this.renderer.render(this.scene, this.camera);
     this.cb.frame();
   }
+
+  private lastSol: unknown = null;
+  private solTick = 0;
 }

@@ -1,10 +1,11 @@
 // Shared 3D building blocks: breakout-module PCB with a labelled pin header.
 
 import * as THREE from 'three';
+import { headerZ, PIN_PITCH } from './layout';
 import type { Built, PinDef } from './types';
 
 export const PCB_H = 0.12;
-export const PIN_PITCH = 0.5;
+export { PIN_PITCH };
 export const PIN_TOP = 0.55;
 
 const matCache = new Map<string, THREE.MeshStandardMaterial>();
@@ -74,6 +75,8 @@ export interface ModuleOpts {
   color: string;
   title: string;
   pins: PinDef[];
+  /** custom pin positions [x, z] (default: header along the front edge) */
+  layout?: Record<string, [number, number]>;
   /** extra silkscreen drawing */
   draw?: (ctx: CanvasRenderingContext2D, W: number, H: number, ppu: number) => void;
 }
@@ -82,6 +85,8 @@ export interface ModuleOpts {
 export function makeModule(o: ModuleOpts): Built {
   const root = new THREE.Group();
   const ppu = 80;
+  const n = o.pins.length;
+  const pos = (i: number, name: string): [number, number] => o.layout?.[name] ?? [(i - (n - 1) / 2) * PIN_PITCH, headerZ(o.d)];
   const { tex } = canvasTexture(o.w, o.d, ppu, (ctx, W, H) => {
     ctx.fillStyle = o.color;
     ctx.fillRect(0, 0, W, H);
@@ -98,10 +103,9 @@ export function makeModule(o: ModuleOpts): Built {
     ctx.fillText(o.title, W / 2, 0.28 * ppu);
     // pin labels above the header
     ctx.font = `bold ${0.16 * ppu}px system-ui, sans-serif`;
-    const n = o.pins.length;
     o.pins.forEach((p, i) => {
-      const x = (o.w / 2 + (i - (n - 1) / 2) * PIN_PITCH) * ppu;
-      ctx.fillText(p.label, x, H - 0.48 * ppu);
+      const [x, z] = pos(i, p.name);
+      ctx.fillText(p.label, (o.w / 2 + x) * ppu, (o.d / 2 + z - 0.26) * ppu);
     });
     o.draw?.(ctx, W, H, ppu);
   });
@@ -114,10 +118,9 @@ export function makeModule(o: ModuleOpts): Built {
   root.add(pcb);
 
   const pins = new Map<string, THREE.Object3D>();
-  const n = o.pins.length;
   o.pins.forEach((p, i) => {
-    const x = (i - (n - 1) / 2) * PIN_PITCH;
-    pins.set(p.name, headerPin(root, p.name, x, o.d / 2 - 0.22, PCB_H));
+    const [x, z] = pos(i, p.name);
+    pins.set(p.name, headerPin(root, p.name, x, z, PCB_H));
   });
   return { root, pins, parts: {} };
 }

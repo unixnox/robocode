@@ -5,7 +5,8 @@ import { COMPONENT } from './components/registry';
 import { EXAMPLES, loadExample } from './examples';
 import { SceneManager, type Selection } from './scene/SceneManager';
 import { BOARD_PIN } from './sim/boardPins';
-import { newId, validateProject, withDefaults, type Project } from './sim/project';
+import { snapToBreadboard } from './sim/netlist';
+import { boardWire, BOARD_ID, newId, otherEnd, sameEnd, validateProject, withDefaults, wireTouches, type Endpoint, type Project } from './sim/project';
 import { Simulator, type WorkerLike } from './sim/Simulator';
 import { ToneOutput } from './ui/audio';
 import { CodeEditor } from './ui/editor';
@@ -57,6 +58,15 @@ const sim = new Simulator(
       btnStop.disabled = !running;
       if (!running) audio.stopAll();
     },
+    // worker-side device state that belongs to the project (SD card files, RTC time)
+    device: (id, st) => {
+      const c = sim.project.components.find((x) => x.id === id);
+      if (!c) return;
+      let dirty = false;
+      if (st && typeof st === 'object' && 'files' in st) { c.props.files = st.files; dirty = true; }
+      if (st && typeof st === 'object' && 'offset' in st) { c.props.offset = st.offset; dirty = true; }
+      if (dirty) save();
+    },
   },
 );
 
@@ -81,8 +91,9 @@ const scene = new SceneManager($('viewport'), sim, {
     save();
   },
   drop: (type, x, z) => addComponent(type, x, z),
-  addWire: (comp, pin, board) => setWire(comp, pin, board),
+  addWire: (a, b) => addWire(a, b),
   tones: (t) => audio.update(t),
+  click: () => audio.click(),
   frame: () => tick(),
 });
 
@@ -94,6 +105,10 @@ const inspector = new Inspector($('inspector'), sim, {
   rotate: (id) => rotate(id),
   remove: (sel) => removeSelection(sel),
   setWire: (comp, pin, board) => setWire(comp, pin, board),
+  sendIr: (address, command) => {
+    if (!sim.running) serial.system('ยังไม่ได้รันโปรแกรม — กด ▶ รัน ก่อนกดรีโมต');
+    sim.sendIr({ address, command });
+  },
   close: () => select(null),
 });
 
@@ -113,30 +128,52 @@ function addComponent(type: string, x?: number, z?: number) {
   const def = COMPONENT.get(type);
   if (!def) return;
   if (x === undefined || z === undefined) {
-    // free spot behind the board
-    const taken = sim.project.components.map((c) => c.x);
-    x = 0;
-    z = -5;
-    for (const cand of [-4, 0, 4, -8, 8, -12, 12]) {
-      if (!taken.some((t) => Math.abs(t - cand) < 2)) { x = cand; break; }
+    if (def.breadboard) {
+      // in front of the ESP32
+      x = 0;
+      z = 8;
+      while (sim.project.components.some((c) => COMPONENT.get(c.type)?.breadboard && Math.abs(c.z - z!) < 9)) z += 10.5;
+    } else {
+      // free spot behind the board
+      const taken = sim.project.components.filter((c) => c.z < -2).map((c) => c.x);
+      x = 0;
+      z = -5;
+      for (const cand of [-4, 0, 4, -8, 8, -12, 12, -16, 16]) {
+        if (!taken.some((t) => Math.abs(t - cand) < 2.5)) { x = cand; break; }
+      }
     }
   }
   const id = nextName(type);
-  sim.project.components.push({ id, type, x, z, rot: 0, props: { ...def.defaults } });
-  if (def.autoWire) {
+  const comp = { id, type, x, z, rot: 0, props: structuredClone(def.defaults) };
+  sim.project.components.push(comp);
+  const snap = snapToBreadboard(sim.project, COMPONENT, comp);
+  if (snap) [comp.x, comp.z] = snap;
+  if (def.autoWire && !snap) {
     for (const [pin, board] of Object.entries(def.autoWire)) {
-      if (BOARD_PIN.has(board)) sim.project.wires.push({ id: newId('w'), comp: id, pin, board });
+      if (BOARD_PIN.has(board)) sim.project.wires.push(boardWire(newId('w'), id, pin, board));
     }
-    serial.system(`ต่อสาย I2C ของ ${def.title} ให้อัตโนมัติ (SDA→GPIO21, SCL→GPIO22)`, 'info');
+    serial.system(`ต่อสายของ ${def.title} ให้อัตโนมัติตามขามาตรฐาน (แก้ได้ในแผงคุณสมบัติ)`, 'info');
   }
   scene.sync();
   select({ kind: 'comp', id });
   save();
 }
 
+/** Connect a component pin to an ESP32 header pin, replacing its previous ESP32 wire. */
 function setWire(comp: string, pin: string, board: string | null) {
-  sim.project.wires = sim.project.wires.filter((w) => !(w.comp === comp && w.pin === pin));
-  if (board) sim.project.wires.push({ id: newId('w'), comp, pin, board });
+  const me = { comp, pin };
+  sim.project.wires = sim.project.wires.filter((w) => !(wireTouches(w, me) && otherEnd(w, me).comp === BOARD_ID));
+  if (board) sim.project.wires.push(boardWire(newId('w'), comp, pin, board));
+  scene.sync();
+  inspector.render();
+  save();
+}
+
+/** Wire between any two pins (clicked in the 3D view). */
+function addWire(a: Endpoint, b: Endpoint) {
+  if (sameEnd(a, b)) return;
+  if (sim.project.wires.some((w) => wireTouches(w, a) && sameEnd(otherEnd(w, a), b))) return;
+  sim.project.wires.push({ id: newId('w'), a, b });
   scene.sync();
   inspector.render();
   save();
@@ -154,7 +191,8 @@ function removeSelection(sel: Selection) {
   if (!sel) return;
   if (sel.kind === 'comp') {
     sim.project.components = sim.project.components.filter((c) => c.id !== sel.id);
-    sim.project.wires = sim.project.wires.filter((w) => w.comp !== sel.id);
+    sim.project.wires = sim.project.wires.filter((w) => w.a.comp !== sel.id && w.b.comp !== sel.id);
+    sim.mem.delete(sel.id);
   } else if (sel.kind === 'wire') {
     sim.project.wires = sim.project.wires.filter((w) => w.id !== sel.id);
   } else return;
@@ -169,6 +207,7 @@ function loadProject(p: Project) {
   editor.code = p.code;
   select(null);
   scene.sync();
+  scene.fitView();
   serial.clear();
   setStatus('');
   save();
@@ -230,7 +269,7 @@ exSel.onchange = () => {
 $('btn-new').onclick = () => {
   if (!confirm('เริ่มโปรเจกต์ใหม่? (งานปัจจุบันจะถูกแทนที่)')) return;
   loadProject({
-    version: 1, name: 'โปรเจกต์ใหม่', components: [], wires: [],
+    version: 2, name: 'โปรเจกต์ใหม่', components: [], wires: [],
     code: 'void setup() {\n  Serial.begin(115200);\n  Serial.println("Hello ESP32!");\n}\n\nvoid loop() {\n  \n}\n',
   });
 };
@@ -288,6 +327,7 @@ window.addEventListener('keydown', (e) => {
 
 buildPalette($('palette'), (type) => addComponent(type));
 scene.sync();
+scene.fitView();
 serial.system('ยินดีต้อนรับ! เลือกตัวอย่างจากเมนู 📚 หรือลากอุปกรณ์มาวาง แล้วกด ▶ รัน', 'info');
 
 // expose for debugging / e2e tests

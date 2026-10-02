@@ -42,4 +42,20 @@ export class ToneOutput {
   }
 
   stopAll() { this.update(new Map()); }
+
+  /** Short mechanical click (relay). */
+  click() {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    const len = Math.floor(this.ctx.sampleRate * 0.015);
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (len / 6));
+    const src = this.ctx.createBufferSource();
+    const gain = this.ctx.createGain();
+    gain.gain.value = 0.25;
+    src.buffer = buf;
+    src.connect(gain).connect(this.ctx.destination);
+    src.start(t);
+  }
 }

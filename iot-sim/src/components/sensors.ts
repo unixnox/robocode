@@ -11,23 +11,27 @@ const POWER_PINS = (io: { name: string; label: string; hint?: string }[]) => [
 const NOT_POWERED = 'ยังไม่ได้ต่อไฟ (VCC→3V3/VIN, GND→GND)';
 
 export const dht22: ComponentDef = {
+  size: [1.8, 2.4],
   type: 'dht22',
-  title: 'DHT22',
+  title: 'DHT11 / DHT22',
   category: 'sensor',
   icon: '🌡️',
   desc: 'เซนเซอร์อุณหภูมิและความชื้น ใช้ไลบรารี DHT.h: dht.readTemperature(), dht.readHumidity()',
   pins: POWER_PINS([{ name: 'DATA', label: 'DATA', hint: 'ต่อกับ GPIO ใดก็ได้' }]),
   props: [
+    { key: 'model', label: 'รุ่น', kind: 'select', options: [{ value: 'dht22', label: 'DHT22 (สีขาว ละเอียด 0.1)' }, { value: 'dht11', label: 'DHT11 / KY-015 (สีฟ้า)' }] },
     { key: 't', label: 'อุณหภูมิ', kind: 'range', min: -40, max: 80, step: 0.1, unit: '°C' },
     { key: 'h', label: 'ความชื้น', kind: 'range', min: 0, max: 100, step: 0.1, unit: '%' },
   ],
-  defaults: { t: 28.5, h: 62 },
-  build() {
-    const b = makeModule({ w: 1.8, d: 2.4, color: '#1f4e8c', title: 'DHT22', pins: this.pins });
-    const shell = box(1.3, 0.5, 1.5, mat(0xf2f2f2, { roughness: 0.8 }), 0, PCB_H + 0.25, -0.35);
+  defaults: { model: 'dht22', t: 28.5, h: 62 },
+  build(p) {
+    const dht11 = p.model === 'dht11';
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#1f4e8c', title: dht11 ? 'DHT11' : 'DHT22', pins: this.pins });
+    const shellColor = dht11 ? 0x2a7de1 : 0xf2f2f2;
+    const shell = box(1.3, 0.5, 1.5, mat(shellColor, { roughness: 0.8 }), 0, PCB_H + 0.25, -0.35);
     b.root.add(shell);
     const { tex } = canvasTexture(1.3, 1.5, 64, (ctx, W, H) => {
-      ctx.fillStyle = '#f2f2f2';
+      ctx.fillStyle = dht11 ? '#2a7de1' : '#f2f2f2';
       ctx.fillRect(0, 0, W, H);
       ctx.fillStyle = '#9aa0a6';
       for (let y = 10; y < H - 6; y += 12) for (let x = 8; x < W - 6; x += 12) ctx.fillRect(x, y, 6, 6);
@@ -48,6 +52,7 @@ export const dht22: ComponentDef = {
 };
 
 export const ldr: ComponentDef = {
+  size: [2.2, 1.8],
   type: 'ldr',
   title: 'LDR (แสง)',
   category: 'sensor',
@@ -60,7 +65,7 @@ export const ldr: ComponentDef = {
   ],
   defaults: { light: 60, threshold: 50 },
   build() {
-    const b = makeModule({ w: 2.2, d: 1.8, color: '#1f4e8c', title: 'LDR', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#1f4e8c', title: 'LDR', pins: this.pins });
     const head = cyl(0.25, 0.12, mat(0xd8a35a), 0.55, PCB_H + 0.3, -0.35);
     const { tex } = canvasTexture(0.5, 0.5, 64, (ctx, W, H) => {
       ctx.fillStyle = '#e8c27a'; ctx.fillRect(0, 0, W, H);
@@ -98,6 +103,7 @@ export const ldr: ComponentDef = {
 };
 
 export const hcsr04: ComponentDef = {
+  size: [4.4, 2.0],
   type: 'hcsr04',
   title: 'HC-SR04',
   category: 'sensor',
@@ -107,7 +113,7 @@ export const hcsr04: ComponentDef = {
   props: [{ key: 'cm', label: 'ระยะวัตถุ', kind: 'range', min: 2, max: 450, step: 1, unit: 'cm' }],
   defaults: { cm: 80 },
   build() {
-    const b = makeModule({ w: 4.4, d: 2.0, color: '#1f5fa8', title: 'HC-SR04', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#1f5fa8', title: 'HC-SR04', pins: this.pins });
     for (const x of [-1.15, 1.15]) {
       const can = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.75, 1.1, 32), SILVER());
       can.rotation.x = Math.PI / 2;
@@ -149,6 +155,7 @@ export const hcsr04: ComponentDef = {
 };
 
 export const pir: ComponentDef = {
+  size: [2.2, 2.2],
   type: 'pir',
   title: 'PIR (ตรวจจับคน)',
   category: 'sensor',
@@ -158,11 +165,11 @@ export const pir: ComponentDef = {
   props: [{ key: 'motion', label: 'มีการเคลื่อนไหว', kind: 'toggle' }],
   defaults: { motion: false },
   build() {
-    const b = makeModule({ w: 2.2, d: 2.2, color: '#2e7d32', title: 'HC-SR501', pins: this.pins });
+    const b = makeModule({ w: this.size[0], d: this.size[1], color: '#2e7d32', title: 'HC-SR501', pins: this.pins });
     const domeMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, emissive: 0xff7a00, emissiveIntensity: 0, roughness: 0.4, transparent: true, opacity: 0.95 });
     const dome = new THREE.Mesh(new THREE.SphereGeometry(0.8, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2), domeMat);
     dome.position.set(0, PCB_H + 0.15, -0.3);
-    dome.userData.toggle = 'motion';
+    dome.userData.action = { kind: 'toggle', key: 'motion', ms: 0 };
     b.root.add(box(1.7, 0.15, 1.7, mat(0xf5f5f5), 0, PCB_H + 0.075, -0.3), dome);
     b.parts = { domeMat };
     b.pressables = [dome];

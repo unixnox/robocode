@@ -52,13 +52,37 @@ export function createDeviceLibs(board: Board) {
 
   class TwoWire {
     private txAddr = -1;
+    private tx: number[] = [];
+    private reg = new Map<number, number>();
+    private rx: number[] = [];
     begin(sda?: number, scl?: number) {
       if (sda !== undefined && scl !== undefined) board.i2cPins = { sda, scl };
       return true;
     }
     setClock() {}
-    beginTransmission(addr: number) { this.txAddr = addr; }
-    endTransmission() { return board.hasI2C(this.txAddr) ? 0 : 2; }
+    beginTransmission(addr: number) { this.txAddr = addr; this.tx = []; }
+    write(v: number | string) {
+      if (typeof v === 'string') { for (const ch of v) this.tx.push(ch.charCodeAt(0) & 0xff); return v.length; }
+      this.tx.push(v & 0xff);
+      return 1;
+    }
+    endTransmission() {
+      if (!board.hasI2C(this.txAddr)) return 2;
+      // first byte written is the register pointer of register-based devices (MPU6050…)
+      if (this.tx.length) this.reg.set(this.txAddr, this.tx[0]);
+      return 0;
+    }
+    requestFrom(addr: number, n: number) {
+      this.rx = [];
+      if (!board.hasI2C(addr)) return 0;
+      let r = this.reg.get(addr) ?? 0;
+      for (let i = 0; i < n; i++) this.rx.push(board.i2cRead(addr, r++ & 0xff));
+      this.reg.set(addr, r & 0xff);
+      return n;
+    }
+    available() { return this.rx.length; }
+    read() { return this.rx.length ? this.rx.shift()! : -1; }
+    peek() { return this.rx.length ? this.rx[0] : -1; }
   }
 
   class IPAddress {

@@ -10,6 +10,8 @@ function ctxFor(nets: Record<string, Net>): ElecCtx {
   return {
     net, gpio, out: () => null, volts: () => null, drive: () => {}, i2c: () => {},
     powered: (v = 'VCC', g = 'GND') => net(v)?.kind === 'supply' && net(g)?.kind === 'gnd',
+    connected: (p) => net(p) !== null, members: (pin) => [{ comp: 'x', pin }], device: () => {}, state: () => undefined,
+    mem: {}, now: 0, id: 'x',
   };
 }
 
