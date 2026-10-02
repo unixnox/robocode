@@ -62,3 +62,7 @@ java -cp "out:runner.jar" Arena /path/to/arena melee 20 SmartBot Walls Crazy Fir
 
 - **1v1, 10 rounds each:** won 100/100 rounds against SpinBot, Walls, Crazy, Fire, RamFire, TrackFire, VelociRobot, Corners, Tracker, SittingDuck and MyFirstRobot.
 - **10‑robot melee, 20 rounds:** 1st place, won 18/20 rounds, with a score of 17383 against 8751 for the runner‑up (Walls).
+
+## ESP32 IoT Simulator
+
+This repo also has a browser-based ESP32 + sensor simulator with a WebGL 3D scene, drag & drop wiring and an Arduino C++ code editor. See [`iot-sim/`](iot-sim/README.md).

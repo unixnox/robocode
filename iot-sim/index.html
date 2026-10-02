@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ESP32 IoT Simulator</title>
+  <meta name="description" content="จำลอง ESP32 และเซนเซอร์ในฉาก 3D ลากวางอุปกรณ์ ต่อสาย เขียนโค้ด Arduino แล้วรันได้ทันทีบนเบราว์เซอร์" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>" />
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">📡 <b>ESP32 IoT Simulator</b></div>
+    <div class="tb-group">
+      <button id="btn-run" class="btn primary" title="คอมไพล์และรัน (Ctrl+Enter)">▶ รัน</button>
+      <button id="btn-stop" class="btn danger" title="หยุด" disabled>■ หยุด</button>
+      <label class="tb-label">ความเร็ว
+        <select id="sel-speed">
+          <option value="0.25">×0.25</option>
+          <option value="0.5">×0.5</option>
+          <option value="1" selected>×1</option>
+          <option value="2">×2</option>
+          <option value="5">×5</option>
+        </select>
+      </label>
+      <span id="sim-clock" class="clock" title="เวลาในตัวจำลอง (millis)">⏱ 0.000 s</span>
+    </div>
+    <div class="tb-group">
+      <select id="sel-example" title="ตัวอย่าง"><option value="">📚 ตัวอย่าง…</option></select>
+      <button id="btn-new" class="btn" title="โปรเจกต์ใหม่">🆕 ใหม่</button>
+      <button id="btn-export" class="btn" title="บันทึกเป็นไฟล์ .json">💾 Export</button>
+      <button id="btn-import" class="btn" title="เปิดไฟล์ .json">📂 Import</button>
+      <input id="file-import" type="file" accept=".json,application/json" hidden />
+      <button id="btn-sound" class="btn" title="เปิด/ปิดเสียง">🔊</button>
+      <button id="btn-help" class="btn" title="วิธีใช้">❔</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="palette" id="palette" aria-label="อุปกรณ์"></aside>
+
+    <section class="viewport" id="viewport">
+      <div class="hint" id="viewport-hint">ลากอุปกรณ์จากด้านซ้ายมาวาง • คลิกขาอุปกรณ์ แล้วคลิกขาบน ESP32 เพื่อต่อสาย • ลากเมาส์ขวาเพื่อเลื่อนมุมมอง</div>
+      <div class="inspector" id="inspector" hidden></div>
+    </section>
+
+    <section class="side">
+      <div class="editor-head">
+        <span>📝 sketch.ino</span>
+        <span id="compile-status" class="status"></span>
+      </div>
+      <div class="editor" id="editor"></div>
+      <div class="serial">
+        <div class="serial-head">
+          <span>🖥️ Serial Monitor</span>
+          <span class="spacer"></span>
+          <label><input type="checkbox" id="chk-autoscroll" checked /> เลื่อนอัตโนมัติ</label>
+          <button id="btn-clear-serial" class="btn small">ล้าง</button>
+        </div>
+        <pre id="serial-out" class="serial-out" aria-live="polite"></pre>
+        <form id="serial-form" class="serial-input">
+          <input id="serial-text" type="text" placeholder="ส่งข้อความไปที่ Serial (Enter)" autocomplete="off" />
+          <select id="serial-eol" title="ปิดท้ายบรรทัด">
+            <option value="\n" selected>NL</option>
+            <option value="">ไม่มี</option>
+            <option value="\r\n">CR+NL</option>
+          </select>
+          <button class="btn small" type="submit">ส่ง</button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="help" class="help">
+    <h2>วิธีใช้</h2>
+    <ol>
+      <li><b>วางอุปกรณ์:</b> ลากจากแถบซ้ายลงในฉาก (หรือคลิกเพื่อวางอัตโนมัติ) ลากตัวอุปกรณ์เพื่อย้าย กด <kbd>R</kbd> หมุน <kbd>Delete</kbd> ลบ</li>
+      <li><b>ต่อสาย:</b> คลิกขาทองของอุปกรณ์ แล้วคลิกขาบน ESP32 (หรือเลือกขาในแผงคุณสมบัติ) คลิกสายแล้วกด <kbd>Delete</kbd> เพื่อลบ</li>
+      <li><b>ไฟเลี้ยง:</b> ขา VCC ต่อ <b>3V3</b> หรือ <b>VIN</b> (5V) และ GND ต่อ <b>GND</b> — อุปกรณ์ที่ไม่ได้ต่อไฟจะไม่ทำงาน</li>
+      <li><b>เขียนโค้ด</b> Arduino C++ (setup/loop) แล้วกด <b>▶ รัน</b> หรือ <kbd>Ctrl</kbd>+<kbd>Enter</kbd></li>
+      <li><b>ปรับค่าเซนเซอร์:</b> คลิกเลือกอุปกรณ์ แล้วเลื่อนแถบในแผงคุณสมบัติ ปุ่มกด: คลิกค้างที่ปุ่มสีแดง</li>
+      <li>มุมมอง: ลากเมาส์ซ้าย = หมุน, ขวา = เลื่อน, ล้อเมาส์ = ซูม</li>
+    </ol>
+    <h3>ไลบรารีที่รองรับ</h3>
+    <p><code>Serial</code>, <code>WiFi</code> (จำลอง), <code>Wire</code>, <code>DHT.h</code>, <code>ESP32Servo.h</code>, <code>Adafruit_SSD1306.h</code> + <code>Adafruit_GFX.h</code>, <code>LiquidCrystal_I2C.h</code>, LEDC/analogWrite, tone, pulseIn, attachInterrupt</p>
+    <h3>ข้อจำกัด</h3>
+    <p>รองรับภาษา C++ ส่วนที่ใช้บ่อย (ตัวแปร, array, struct, enum, ฟังก์ชัน, String) แต่ยังไม่รองรับ pointer, class, template และ reference ของชนิดพื้นฐาน — โค้ดถูกแปลงเป็น JavaScript และรันในเบราว์เซอร์ ไม่ได้จำลองระดับคำสั่งเครื่องของ ESP32</p>
+    <form method="dialog"><button class="btn primary">เข้าใจแล้ว</button></form>
+  </dialog>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
