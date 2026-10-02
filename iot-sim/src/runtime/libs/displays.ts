@@ -42,7 +42,7 @@ export function createDisplayLibs(board: Board) {
 
     display() {
       if (!this.ok) return;
-      board.oled({ addr: this.addr, w: this.WIDTH, h: this.HEIGHT, buf: this.buf.slice(), invert: this.inverted });
+      board.oled({ addr: this.addr, ...board.i2cPins, w: this.WIDTH, h: this.HEIGHT, buf: this.buf.slice(), invert: this.inverted });
     }
     clearDisplay() { this.buf.fill(0); }
     invertDisplay(i: boolean) { this.inverted = !!i; this.display(); }
@@ -237,7 +237,7 @@ export function createDisplayLibs(board: Board) {
     private push() {
       if (!this.ok) return;
       board.lcd({
-        addr: this.addr, cols: this.cols, rows: this.rows, chars: this.chars.map((r) => r.slice()),
+        addr: this.addr, ...board.i2cPins, cols: this.cols, rows: this.rows, chars: this.chars.map((r) => r.slice()),
         custom: this.custom.map((r) => r.slice()), backlight: this.light, display: this.on,
         cursor: this.cur, blink: this.blinkOn, cx: this.cx, cy: this.cy,
       });

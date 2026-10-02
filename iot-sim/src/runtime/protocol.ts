@@ -33,9 +33,10 @@ export interface Inputs {
   i2c: I2CDevice[];
 }
 
-export interface OledFrame { addr: number; w: number; h: number; buf: Uint8Array; invert: boolean }
+/** sda/scl: GPIOs of the I2C bus the frame was sent on */
+export interface OledFrame { addr: number; sda: number; scl: number; w: number; h: number; buf: Uint8Array; invert: boolean }
 export interface LcdFrame {
-  addr: number; cols: number; rows: number;
+  addr: number; sda: number; scl: number; cols: number; rows: number;
   /** character codes per row */
   chars: number[][];
   custom: number[][];

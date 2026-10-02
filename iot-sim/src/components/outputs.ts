@@ -4,7 +4,12 @@ import * as THREE from 'three';
 import { glyph } from '../runtime/libs/font5x7';
 import type { LcdFrame, OledFrame } from '../runtime/protocol';
 import { box, canvasTexture, cyl, makeModule, mat, PCB_H } from './module';
-import type { ComponentDef } from './types';
+import type { ComponentDef, ElecCtx } from './types';
+
+/** A display only receives frames sent on the I2C bus its own SDA/SCL pins are wired to. */
+function onBus<F extends { sda: number; scl: number }>(ctx: ElecCtx, frame: F | undefined): F | undefined {
+  return frame && ctx.gpio('SDA') === frame.sda && ctx.gpio('SCL') === frame.scl ? frame : undefined;
+}
 
 const NOT_POWERED = 'ยังไม่ได้ต่อไฟ (VCC→3V3/VIN, GND→GND)';
 
@@ -156,7 +161,7 @@ export const oled: ComponentDef = {
     if (ctx.powered()) ctx.i2c(+p.addr, 'SDA', 'SCL');
   },
   render(ctx, v, p, f) {
-    const frame = ctx.powered() && f.running ? f.oled(+p.addr) : undefined;
+    const frame = ctx.powered() && f.running ? onBus(ctx, f.oled(+p.addr)) : undefined;
     if (frame === v.parts.last) return;
     v.parts.last = frame;
     const c: CanvasRenderingContext2D = v.parts.ctx;
@@ -222,7 +227,7 @@ export const lcd: ComponentDef = {
   },
   render(ctx, v, p, f) {
     const powered = ctx.powered();
-    const frame = powered && f.running ? f.lcd(+p.addr) : undefined;
+    const frame = powered && f.running ? onBus(ctx, f.lcd(+p.addr)) : undefined;
     const blinkPhase = frame?.blink ? Math.floor(f.time * 2) % 2 : 0;
     const key = `${powered}|${blinkPhase}`;
     if (frame === v.parts.last && key === v.parts.drawn) return;
