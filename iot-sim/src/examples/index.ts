@@ -661,6 +661,128 @@ void loop() {
       { id: 'led1', type: 'led', x: 1.5, z: -4.5, props: { color: 'white' }, wires: { '+': 'D2', '-': 'GND2' } },
     ],
   },
+  {
+    id: 'home',
+    title: '17. สั่งเปิด/ปิดเครื่องใช้ไฟฟ้าในบ้านผ่านรีเลย์',
+    code: `// ควบคุมหลอดไฟและพัดลม (ไฟบ้าน 220V) ด้วยรีเลย์ 2 ช่อง
+//  - กดปุ่มสีแดงในฉาก 3D เพื่อสลับเปิด/ปิด
+//  - หรือพิมพ์คำสั่งใน Serial Monitor: lamp on | lamp off | fan on | fan off
+//                                     all on | all off | fan 10 (เปิดพัดลม 10 วินาทีแล้วปิดเอง) | status
+//
+// การต่อสาย: ปลั๊ก L → COM ของรีเลย์ → NO → L ของเครื่องใช้ไฟฟ้า, ปลั๊ก N → N ของเครื่องใช้ไฟฟ้า
+// ⚠ ของจริง: ไฟ 220V อันตรายถึงชีวิต ใช้โมดูลรีเลย์ที่รองรับ 250VAC/10A, ใส่กล่องปิดมิดชิด
+//   และให้ช่างไฟฟ้าตรวจก่อนใช้งานจริงเสมอ
+
+struct Appliance {
+  const char* name;
+  int relayPin;
+  int buttonPin;
+  bool on;
+  int lastButton;
+  unsigned long offAt;   // ปิดอัตโนมัติเมื่อ millis() ถึงค่านี้ (0 = ไม่ตั้งเวลา)
+};
+
+Appliance devices[] = {
+  {"lamp", 26, 4, false, HIGH, 0},
+  {"fan", 27, 19, false, HIGH, 0},
+};
+const int COUNT = sizeof(devices) / sizeof(devices[0]);
+
+void setDevice(int i, bool on) {
+  devices[i].on = on;
+  devices[i].offAt = 0;
+  digitalWrite(devices[i].relayPin, on ? HIGH : LOW);   // KY-019: HIGH = รีเลย์ทำงาน (COM ต่อ NO)
+  Serial.printf("%-4s -> %s\\n", devices[i].name, on ? "ON" : "OFF");
+}
+
+int findDevice(String name) {
+  for (int i = 0; i < COUNT; i++) {
+    if (name == devices[i].name) return i;
+  }
+  return -1;
+}
+
+void printStatus() {
+  for (int i = 0; i < COUNT; i++) {
+    Serial.printf("  %-4s : %s", devices[i].name, devices[i].on ? "ON" : "OFF");
+    if (devices[i].offAt) Serial.printf(" (ปิดใน %lu s)", (devices[i].offAt - millis()) / 1000);
+    Serial.println();
+  }
+}
+
+void handleCommand(String cmd) {
+  cmd.trim();
+  cmd.toLowerCase();
+  if (cmd.length() == 0) return;
+  int space = cmd.indexOf(' ');
+  String target = space < 0 ? cmd : cmd.substring(0, space);
+  String arg = space < 0 ? "" : cmd.substring(space + 1);
+
+  if (target == "status") { printStatus(); return; }
+  if (target == "all") {
+    for (int i = 0; i < COUNT; i++) setDevice(i, arg == "on");
+    return;
+  }
+  int i = findDevice(target);
+  if (i < 0) {
+    Serial.println("ไม่รู้จักคำสั่ง: " + cmd);
+    Serial.println("ใช้: lamp on|off, fan on|off, fan 10, all on|off, status");
+    return;
+  }
+  if (arg == "on") setDevice(i, true);
+  else if (arg == "off") setDevice(i, false);
+  else if (arg.toInt() > 0) {
+    setDevice(i, true);
+    devices[i].offAt = millis() + arg.toInt() * 1000UL;
+    Serial.printf("     ตั้งเวลาปิด %d วินาที\\n", arg.toInt());
+  } else setDevice(i, !devices[i].on);
+}
+
+void setup() {
+  Serial.begin(115200);
+  for (int i = 0; i < COUNT; i++) {
+    pinMode(devices[i].relayPin, OUTPUT);
+    digitalWrite(devices[i].relayPin, LOW);
+    pinMode(devices[i].buttonPin, INPUT_PULLUP);
+  }
+  Serial.println("ระบบควบคุมเครื่องใช้ไฟฟ้าพร้อมแล้ว");
+  Serial.println("คำสั่ง: lamp on, lamp off, fan on, fan off, fan 10, all off, status");
+}
+
+void loop() {
+  // ปุ่มกด (INPUT_PULLUP: กด = LOW) — สลับสถานะเมื่อกดลง
+  for (int i = 0; i < COUNT; i++) {
+    int b = digitalRead(devices[i].buttonPin);
+    if (b == LOW && devices[i].lastButton == HIGH) setDevice(i, !devices[i].on);
+    devices[i].lastButton = b;
+  }
+  // ตัวตั้งเวลาปิด
+  for (int i = 0; i < COUNT; i++) {
+    if (devices[i].offAt && millis() >= devices[i].offAt) {
+      Serial.printf("%s หมดเวลา\\n", devices[i].name);
+      setDevice(i, false);
+    }
+  }
+  // คำสั่งจาก Serial Monitor
+  if (Serial.available()) handleCommand(Serial.readStringUntil('\\n'));
+  delay(20);
+}
+`,
+    parts: [
+      { id: 'btn1', type: 'button', x: -2.5, z: 5, rot: 2, wires: { A: 'D4', B: 'GND2' } },
+      { id: 'btn2', type: 'button', x: 1.5, z: 5, rot: 2, wires: { A: 'D19', B: 'GND2' } },
+      { id: 'relay1', type: 'relay', x: -2.5, z: -6.5, wires: { S: 'D26', VCC: 'VIN', GND: 'GND1' } },
+      { id: 'relay2', type: 'relay', x: 2.5, z: -6.5, wires: { S: 'D27', VCC: 'VIN', GND: 'GND1' } },
+      { id: 'plug', type: 'mains', x: 0, z: -12.5 },
+      { id: 'lamp', type: 'appliance', x: -8, z: -8, props: { kind: 'lamp' } },
+      { id: 'fan', type: 'appliance', x: 8, z: -8, props: { kind: 'fan' } },
+    ],
+    links: [
+      ['plug.L', 'relay1.COM'], ['plug.L', 'relay2.COM'],
+      ['relay1.NO', 'lamp.L'], ['relay2.NO', 'fan.L'],
+      ['plug.N', 'lamp.N'], ['plug.N', 'fan.N'],
+    ],
+  },
 ];
 
 export const EXAMPLES = EXAMPLES_SRC.map((e) => ({ id: e.id, title: e.title }));

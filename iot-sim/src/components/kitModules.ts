@@ -41,6 +41,8 @@ export const relay: ComponentDef = kit({
     b.root.add(label);
     b.root.add(box(2.3, 0.7, 0.8, mat(0x2e7d32), 0, PCB_H + 0.35, -2.0));
     for (const x of [-0.75, 0, 0.75]) b.root.add(cyl(0.16, 0.06, SILVER(), x, PCB_H + 0.73, -1.75));
+    // the screw-terminal pins would be buried inside the block: lift their click targets on top of it
+    for (const n of ['NO', 'COM', 'NC']) b.pins.get(n)!.position.y = PCB_H + 0.85;
     b.parts.coil = smdLed(b.root, 1.05, 1.4, 0xff3030);
   },
   shorts: (ctx, p) => (energized(ctx, p) ? [['COM', 'NO']] : [['COM', 'NC']]),

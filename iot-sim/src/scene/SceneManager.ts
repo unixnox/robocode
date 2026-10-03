@@ -6,7 +6,7 @@ import { COMPONENT } from '../components/registry';
 import type { Built, ComponentDef, FrameInfo } from '../components/types';
 import { BOARD_PIN, boardPinTitle } from '../sim/boardPins';
 import { snapToBreadboard } from '../sim/netlist';
-import { BOARD_ID, sameEnd, type Endpoint, type PlacedComponent, type Wire } from '../sim/project';
+import { BOARD_ID, otherEnd, sameEnd, wireTouches, type Endpoint, type PlacedComponent, type Wire } from '../sim/project';
 import type { Simulator } from '../sim/Simulator';
 import { buildEsp32, type Esp32Model } from './esp32Model';
 
@@ -69,6 +69,8 @@ export class SceneManager {
   private ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private selection: Selection = null;
   private pending: (Endpoint & { pos: THREE.Vector3 }) | null = null;
+  /** a wire whose "moving" end was unplugged by clicking a pin; it is out of the project until dropped */
+  private carry: { wire: Wire; index: number; moving: 'a' | 'b' } | null = null;
   private rubber: THREE.Line;
   private drag: { id: string; dx: number; dz: number; moved: boolean; riders: { c: PlacedComponent; ox: number; oz: number }[] } | null = null;
   private pressing: { comp: PlacedComponent; key: string } | null = null;
@@ -269,9 +271,68 @@ export class SceneManager {
     }
   }
 
+  /** Abort a wire in progress; a carried (unplugged) wire goes back where it was. */
   cancelWire() {
+    if (this.carry) {
+      const { wire, index } = this.carry;
+      this.carry = null;
+      // the part at the far end may have been deleted meanwhile: then the wire goes too
+      if (this.pinObj(wire.a) && this.pinObj(wire.b)) {
+        this.sim.project.wires.splice(Math.min(index, this.sim.project.wires.length), 0, wire);
+        this.sync();
+      }
+    }
     this.pending = null;
     this.rubber.visible = false;
+  }
+
+  /** True while a wire end is unplugged and following the mouse. */
+  get carrying() { return this.carry !== null; }
+
+  /** Delete the carried wire instead of putting it back. */
+  discardCarried() {
+    if (!this.carry) return;
+    this.carry = null;
+    this.pending = null;
+    this.rubber.visible = false;
+    this.cb.changed('wire');
+  }
+
+  /** Unplug the end of the last wire attached to "end"; the wire then follows the mouse from its other end. */
+  private pickUp(end: Endpoint, e: PointerEvent): boolean {
+    const wires = this.sim.project.wires;
+    let index = -1;
+    for (let i = wires.length - 1; i >= 0; i--) if (wireTouches(wires[i], end)) { index = i; break; }
+    if (index < 0) return false;
+    const wire = wires[index];
+    const moving = sameEnd(wire.a, end) ? 'a' : 'b';
+    const fixed = moving === 'a' ? wire.b : wire.a;
+    const obj = this.pinObj(fixed);
+    if (!obj) return false;
+    wires.splice(index, 1);
+    this.carry = { wire, index, moving };
+    this.pending = { ...fixed, pos: obj.getWorldPosition(new THREE.Vector3()) };
+    if (this.selection?.kind === 'wire' && this.selection.id === wire.id) { this.selection = null; this.cb.select(null); }
+    this.sync();
+    this.rubber.visible = true;
+    this.updateRubber(e);
+    return true;
+  }
+
+  /** Plug the carried wire's loose end into "end" (its own other end or a duplicate wire = put it back). */
+  private dropCarried(end: Endpoint) {
+    const { wire, index, moving } = this.carry!;
+    const fixed = moving === 'a' ? wire.b : wire.a;
+    if (sameEnd(end, fixed) || this.sim.project.wires.some((w) => wireTouches(w, fixed) && sameEnd(otherEnd(w, fixed), end))) {
+      this.cancelWire();
+      return;
+    }
+    wire[moving] = { comp: end.comp, pin: end.pin };
+    this.sim.project.wires.splice(Math.min(index, this.sim.project.wires.length), 0, wire);
+    this.carry = null;
+    this.pending = null;
+    this.rubber.visible = false;
+    this.cb.changed('wire');
   }
 
   /** Point the camera at everything on the table. */
@@ -419,7 +480,11 @@ export class SceneManager {
       case 'pin': {
         this.controls.enabled = false;
         const pos = hit.obj.getWorldPosition(new THREE.Vector3());
-        if (this.pending && !sameEnd(this.pending, hit.end)) {
+        if (this.carry) {
+          this.dropCarried(hit.end);
+        } else if (!this.pending && !e.shiftKey && this.pickUp(hit.end, e)) {
+          // unplugged an existing wire end; the next pin click plugs it in again
+        } else if (this.pending && !sameEnd(this.pending, hit.end)) {
           this.cb.addWire({ comp: this.pending.comp, pin: this.pending.pin }, hit.end);
           this.cancelWire();
         } else if (this.pending) {
@@ -493,6 +558,14 @@ export class SceneManager {
     return parts.length ? `\nเชื่อมกับ: ${parts.join(', ')}` : '';
   }
 
+  /** Tooltip line telling what a click on this pin will do with wires. */
+  private wireHint(end: Endpoint): string {
+    if (this.carry) return '\n(คลิกเพื่อเสียบปลายสายที่ถอดไว้ • Esc = ใส่คืนที่เดิม • Delete = ลบสาย)';
+    if (this.pending) return '\n(คลิกเพื่อต่อสาย)';
+    if (this.sim.project.wires.some((w) => wireTouches(w, end))) return '\nคลิก = ถอดปลายสายเพื่อย้าย • Shift+คลิก = เดินสายเส้นใหม่';
+    return '';
+  }
+
   private typeOf(id: string) { return this.sim.project.components.find((c) => c.id === id)?.type ?? ''; }
 
   private onMove(e: PointerEvent) {
@@ -527,7 +600,7 @@ export class SceneManager {
           text += `\n${o.mode}${o.mode === 'output' ? ' = ' + (o.level ? 'HIGH' : 'LOW') : o.mode === 'pwm' ? ` ${Math.round(o.duty * 100)}%` : o.mode === 'tone' ? ` ${o.freq} Hz` : o.mode === 'servo' ? ` ${o.angle}°` : ''}`;
         }
       }
-      text += this.netSummary(hit.end);
+      text += this.netSummary(hit.end) + this.wireHint(hit.end);
     } else if (hit?.kind === 'pin') {
       const v = this.views.get(hit.end.comp)!;
       if (v.def.breadboard) {
@@ -540,9 +613,10 @@ export class SceneManager {
         const pd = v.def.pins.find((x) => x.name === hit.end.pin);
         text = `${v.def.title} • ${pd?.label ?? hit.end.pin}${pd?.hint ? ' — ' + pd.hint : ''}`;
         const summary = this.netSummary(hit.end);
-        text += summary || '\nคลิกแล้วคลิกขาอื่น (ESP32 / เบรดบอร์ด / อุปกรณ์) เพื่อต่อสาย';
+        if (summary) text += summary;
+        else if (!this.pending) text += '\nคลิกแล้วคลิกขาอื่น (ESP32 / เบรดบอร์ด / อุปกรณ์) เพื่อต่อสาย';
       }
-      if (this.pending) text += '\n(คลิกเพื่อต่อสาย)';
+      text += this.wireHint(hit.end);
     } else if (hit?.kind === 'press') {
       const a = hit.obj.userData.action as { kind: string };
       text = a.kind === 'toggle' ? 'คลิกเพื่อสลับ' : a.kind === 'pulse' ? 'คลิกเพื่อกระตุ้น' : 'คลิกค้างเพื่อกด';

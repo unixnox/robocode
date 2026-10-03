@@ -139,3 +139,62 @@ test('plug an LED into the breadboard and drive it through a breadboard wire', a
   }, led), { timeout: 5000 }).toBeCloseTo(3.3);
   expect(errors).toEqual([]);
 });
+
+test('click a wired pin to unplug the wire end, click another pin to plug it back in', async ({ page }) => {
+  const errors = await fresh(page);
+  await page.evaluate(() => window.__app.loadExample('blink'));
+  await page.waitForTimeout(300);
+  const click = async (comp: string | null, pin: string, opts: { shift?: boolean } = {}) => {
+    const p = await page.evaluate(([c, n]) => window.__app.scene.pinScreen(c, n), [comp, pin] as const);
+    if (opts.shift) await page.keyboard.down('Shift');
+    await page.mouse.click(p.x, p.y);
+    if (opts.shift) await page.keyboard.up('Shift');
+  };
+  const wireOf = () => page.evaluate(() => {
+    const w = window.__app.sim.project.wires.find((x: any) => x.a.comp === 'led1' && x.a.pin === '+');
+    return w ? `${w.id}:${w.b.pin}` : null;
+  });
+  const before = await wireOf();
+  expect(before).toMatch(/:D2$/);
+  const id = before!.split(':')[0];
+
+  // unplug from D2 (the wire leaves the circuit while carried) and plug into D4
+  await click(null, 'D2');
+  expect(await wireOf()).toBeNull();
+  expect(await page.evaluate(() => window.__app.scene.carrying)).toBe(true);
+  await click(null, 'D4');
+  expect(await wireOf()).toBe(`${id}:D4`);
+
+  // Escape puts a carried wire back where it was
+  await click(null, 'D4');
+  await page.keyboard.press('Escape');
+  expect(await wireOf()).toBe(`${id}:D4`);
+
+  // Shift+click starts a new wire from a pin that already has one
+  const n = await page.evaluate(() => window.__app.sim.project.wires.length);
+  await click(null, 'D4', { shift: true });
+  await click(null, 'D5');
+  expect(await page.evaluate(() => window.__app.sim.project.wires.length)).toBe(n + 1);
+
+  // Delete removes a carried wire
+  await click(null, 'D5');
+  await page.keyboard.press('Delete');
+  expect(await page.evaluate(() => window.__app.sim.project.wires.length)).toBe(n);
+  expect(errors).toEqual([]);
+});
+
+test('home appliance example: Serial command switches the lamp relay', async ({ page }) => {
+  const errors = await fresh(page);
+  await page.evaluate(() => window.__app.loadExample('home'));
+  await page.click('#btn-run');
+  await expect(page.locator('#serial-out')).toContainText('พร้อมแล้ว', { timeout: 10_000 });
+  await page.fill('#serial-text', 'lamp on');
+  await page.press('#serial-text', 'Enter');
+  await expect(page.locator('#serial-out')).toContainText('lamp -> ON', { timeout: 5_000 });
+  await expect.poll(() => page.evaluate(() => {
+    const app = window.__app;
+    const c = app.sim.project.components.find((x: any) => x.id === 'lamp');
+    return app.sim.ctx(c).volts('L');
+  }), { timeout: 5_000 }).toBe(220);
+  expect(errors).toEqual([]);
+});

@@ -24,6 +24,7 @@ npm run dev        # เปิด http://localhost:5173
   - ชี้เมาส์ที่รูเพื่อดูว่ารูนั้นต่อกับอะไรบ้าง (แถบที่ต่อกันจะเรืองสีเขียว)
   - ลากเบรดบอร์ดแล้วอุปกรณ์ที่เสียบอยู่จะย้ายตามไปด้วย
 - **ต่อสาย:** คลิกขาใดก็ได้ แล้วคลิกอีกขาหนึ่ง ทำได้ทั้งขาอุปกรณ์ ขา ESP32 และรูเบรดบอร์ด หรือเลือกขา ESP32 จาก dropdown ในแผงคุณสมบัติก็ได้ สีสายตั้งให้อัตโนมัติ (แดง = ไฟ, ดำ = GND)
+- **ย้ายสาย:** คลิกขาที่มีสายต่ออยู่เพื่อถอดปลายสายออก แล้วคลิกขาใหม่เพื่อเสียบ ระหว่างที่ถอดอยู่ สายเส้นนั้นจะหลุดจากวงจรจริง กด `Esc` หรือคลิกที่ว่างเพื่อใส่คืนที่เดิม กด `Delete` เพื่อลบสาย ถ้าต้องการเดินสายเส้นใหม่จากขาที่มีสายอยู่แล้ว ให้กด `Shift` ค้างแล้วคลิก
 - **จำลองวงจร:** ระบบคำนวณ net จากสายไฟ รูเบรดบอร์ด ปุ่มหรือสวิตช์ที่กดอยู่ และหน้าสัมผัสรีเลย์
   - แหล่งจ่ายไฟ (MB102, MP1584EN) จ่ายไฟเข้ารางได้จริง
   - ถ้าไฟเลี้ยงต่อชนกับ GND ระบบจะเตือนว่าลัดวงจร
@@ -41,7 +42,7 @@ npm run dev        # เปิด http://localhost:5173
 - **เสียงจริง** จาก `tone()` และเสียงคลิกของรีเลย์ ผ่าน WebAudio
 - ปรับความเร็วการจำลองได้ ×0.25 ถึง ×5
 - บันทึกงานอัตโนมัติใน localStorage และ Export/Import เป็นไฟล์ `.json` ได้ ไฟล์ในการ์ด SD และเวลาของ RTC บันทึกไปกับโปรเจกต์ด้วย
-- **ตัวอย่างที่ต่อสายไว้แล้ว 16 ตัวอย่าง:**
+- **ตัวอย่างที่ต่อสายไว้แล้ว 17 ตัวอย่าง:**
   - Blink
   - ปุ่มกด
   - Pot → Servo
@@ -58,6 +59,7 @@ npm run dev        # เปิด http://localhost:5173
   - นาฬิกา DS1302
   - Rotary encoder
   - ปรบมือเปิดไฟ
+  - สั่งเปิด/ปิดหลอดไฟและพัดลม 220V ผ่านรีเลย์ 2 ตัว (ปุ่มกด, คำสั่งทาง Serial, ตั้งเวลาปิด)
 
 ### อุปกรณ์
 
@@ -65,10 +67,10 @@ npm run dev        # เปิด http://localhost:5173
 |---|---|
 | พื้นฐาน | LED, ปุ่มกด, Key switch (KY-004), Potentiometer, RGB LED (KY-016 / KY-009), Bi-color LED (KY-011 / KY-029), 7-color flashing LED (KY-034) |
 | เซนเซอร์ | DHT11 / DHT22 (KY-015), DS18B20 (KY-001), NTC แบบแอนะล็อก (KY-013), NTC + LM393 (KY-028), LDR (KY-018), HC-SR04, PIR, IR obstacle (KY-032), Line tracking (KY-033), Soil moisture, Water level, Flame (KY-026), Microphone (KY-037 / KY-038), Heartbeat (KY-039), Metal touch (KY-036), Joystick (KY-023), Rotary encoder (KY-040), MPU6050 (GY-521), Hall (KY-003 / KY-024 / KY-035), Reed (KY-021 / KY-025), Tilt (KY-020), Mercury (KY-017), Magic light cup (KY-027), Vibration (KY-002), Knock (KY-031), Photo interrupter (KY-010) |
-| แอคชูเอเตอร์ | Servo SG90, Buzzer active/passive (KY-012 / KY-006), Relay 5V (KY-019), Laser (KY-008) |
+| แอคชูเอเตอร์ | Servo SG90, Buzzer active/passive (KY-012 / KY-006), Relay 5V (KY-019), Laser (KY-008), เครื่องใช้ไฟฟ้า 220V (หลอดไฟ / พัดลม) |
 | จอแสดงผล | OLED 0.96" SSD1306 (I2C), LCD 16×2 I2C |
 | สื่อสาร / เก็บข้อมูล | IR receiver (KY-022), IR transmitter (KY-005), SD card reader (SPI), DS1302 RTC |
-| แหล่งจ่ายไฟ | Breadboard power module MB102, MP1584EN buck converter |
+| แหล่งจ่ายไฟ | Breadboard power module MB102, MP1584EN buck converter, ปลั๊กไฟบ้าน 220V AC |
 | เบรดบอร์ด / IC | Breadboard 400 รู, 74HC595 shift register (DIP-16, ต่อพ่วงหลายตัวได้) |
 
 อุปกรณ์ที่มีขา VCC/GND ต้องต่อไฟก่อนจึงจะทำงาน (VCC → 3V3 หรือ VIN, GND → GND) เหมือนของจริง

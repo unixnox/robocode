@@ -335,3 +335,39 @@ describe('palette search', () => {
 });
 
 const COMPONENTS_KW = [...COMPONENT.values()].map((d) => [d.title, ...(d.keywords ?? [])].join(' | ').toLowerCase());
+
+describe('home appliances via relay', () => {
+  const ctxOn = (s: Simulator, id: string) => COMPONENT.get('appliance')!.readout!(ctxOf(s, id), s.project.components.find((c) => c.id === id)!.props);
+
+  test('example: serial commands, buttons and the off-timer switch lamp and fan', () => {
+    const p = withDefaults(loadExample('home'), (t) => COMPONENT.get(t)?.defaults);
+    const { serial, sim: s } = runProject(p, 3000, 50, (t, s2, m) => {
+      if (t === 500) m.serialIn('lamp on\n');
+      if (t === 1000) m.serialIn('fan 1\n');
+      if (t === 1200) {
+        // lamp is on, fan is on with a 1 s timer
+        expect(ctxOn(s2, 'lamp')).toContain('ทำงาน');
+        expect(ctxOn(s2, 'fan')).toContain('ทำงาน');
+      }
+      if (t === 2300) expect(ctxOn(s2, 'fan')).toContain('ปิด');
+      // press the lamp button: toggles the lamp off
+      if (t === 2500) s2.project.components.find((c) => c.id === 'btn1')!.props.pressed = true;
+      if (t === 2600) s2.project.components.find((c) => c.id === 'btn1')!.props.pressed = false;
+    });
+    expect(serial).toContain('lamp -> ON');
+    expect(serial).toContain('fan หมดเวลา');
+    expect(serial).toMatch(/lamp -> OFF/);
+    expect(ctxOn(s, 'lamp')).toContain('ปิด');
+  });
+
+  test('mains readout warns when 220V touches the ESP32 and appliances need 220V', () => {
+    const p = proj([comp('plug', 'mains', -8, -8), comp('lamp', 'appliance', 0, -8)], [
+      boardWire('1', 'plug', 'L', 'D2'),
+      boardWire('2', 'lamp', 'L', 'VIN'), boardWire('3', 'lamp', 'N', 'GND1'),
+    ]);
+    const s = sim(p);
+    s.computeInputs();
+    expect(COMPONENT.get('mains')!.readout!(ctxOf(s, 'plug'), {})).toContain('อันตราย');
+    expect(ctxOn(s, 'lamp')).toContain('ได้ไฟแค่ 5.0 V');
+  });
+});

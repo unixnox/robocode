@@ -202,6 +202,7 @@ function removeSelection(sel: Selection) {
 }
 
 function loadProject(p: Project) {
+  scene.cancelWire();
   sim.stop();
   sim.project = normalize(p);
   editor.code = p.code;
@@ -320,7 +321,8 @@ window.addEventListener('keydown', (e) => {
   const t = e.target as HTMLElement;
   if (t.closest('.cm-editor') || t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return;
   const sel = inspector.selection;
-  if ((e.key === 'Delete' || e.key === 'Backspace') && sel) { e.preventDefault(); removeSelection(sel); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && scene.carrying) { e.preventDefault(); scene.discardCarried(); }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && sel) { e.preventDefault(); removeSelection(sel); }
   else if ((e.key === 'r' || e.key === 'R') && sel?.kind === 'comp') rotate(sel.id);
   else if (e.key === 'Escape') { scene.cancelWire(); select(null); }
 });

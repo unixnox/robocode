@@ -4,6 +4,7 @@ import {
   ds18b20, flame, hallAnalog, hallDigital, hallLinear, heartbeat, keySwitch, knock, lineTrack, magicCup, mercurySwitch, metalTouch,
   microphone, ntcAnalog, obstacle, photoInterrupter, reedLarge, reedMini, soil, tempDigital, tiltSwitch, vibration, waterLevel,
 } from './kitSensors';
+import { appliance, mains } from './home';
 import { buzzer, lcd, oled, servo } from './outputs';
 import { breadboard, ic595, mb102, mp1584 } from './proto';
 import { dht22, hcsr04, ldr, pir } from './sensors';
@@ -17,13 +18,13 @@ export const COMPONENTS: ComponentDef[] = [
   microphone, heartbeat, metalTouch, joystick, encoder, mpu6050,
   hallDigital, hallLinear, hallAnalog, reedMini, reedLarge, tiltSwitch, mercurySwitch, magicCup, vibration, knock, photoInterrupter,
   // actuators
-  servo, buzzer, relay, laser,
+  servo, buzzer, relay, appliance, laser,
   // displays
   oled, lcd,
   // modules
   irReceiver, irEmitter, sdCard, ds1302,
   // power
-  mb102, mp1584,
+  mb102, mp1584, mains,
   // prototyping
   breadboard, ic595,
 ];
